@@ -124,8 +124,8 @@ def check_versions(show_only=False):
                   optional=True,
                   version_getter=_scikit_umfpack_version,
                   show_only=show_only)
-    package_check('meshio', INFO.MESHIO_MIN_VERSION,
-                  show_only=show_only)
+    # package_check('meshio', INFO.MESHIO_MIN_VERSION,
+    #               show_only=show_only)
     package_check('psutil', INFO.PSUTIL_MIN_VERSION, optional=True,
                   show_only=show_only)
     package_check('pyvista', INFO.PYVISTA_MIN_VERSION, optional=True,
