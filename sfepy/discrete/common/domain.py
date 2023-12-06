@@ -8,19 +8,23 @@ from sfepy.discrete.common.region import (Region, get_dependency_graph,
                                           sort_by_dependency, get_parents)
 from sfepy.discrete.parse_regions import create_bnf, visit_stack, ParseException
 
-def region_leaf(domain, regions, rdef, functions):
+
+def region_leaf(domain, regions, rdef, functions, tdim):
     """
     Create/setup a region instance according to rdef.
     """
     n_coor = domain.shape.n_nod
     dim = domain.shape.dim
+    cmesh = domain.cmesh_tdim[tdim]
 
     def _region_leaf(level, op):
         token, details = op['token'], op['orig']
 
         if token != 'KW_Region':
             parse_def = token + '<' + ' '.join(details) + '>'
-            region = Region('leaf', rdef, domain, parse_def=parse_def)
+            if token != 'E_COG':
+                region = Region('leaf', rdef, domain, parse_def=parse_def,
+                                tdim=tdim)
 
         if token == 'KW_Region':
             details = details[1][2:]
@@ -44,7 +48,7 @@ def region_leaf(domain, regions, rdef, functions):
                 assert_(nm.amin(vertices) >= 0)
                 assert_(nm.amax(vertices) < n_coor)
             else:
-                coors = domain.cmesh.coors
+                coors = cmesh.coors
                 y = z = None
                 x = coors[:,0]
 
@@ -61,7 +65,7 @@ def region_leaf(domain, regions, rdef, functions):
             region.vertices = vertices
 
         elif token == 'E_VOS':
-            facets = domain.cmesh.get_surface_facets()
+            facets = cmesh.get_surface_facets()
 
             region.set_kind('facet')
             region.facets = facets
@@ -69,7 +73,7 @@ def region_leaf(domain, regions, rdef, functions):
         elif token == 'E_VBF':
             where = details[2]
 
-            coors = domain.cmesh.coors
+            coors = cmesh.coors
 
             fun = functions[where]
             vertices = fun(coors, domain=domain)
@@ -88,8 +92,20 @@ def region_leaf(domain, regions, rdef, functions):
 
         elif token == 'E_COG':
             group = int(details[3])
+            td = 0
+            for k in range(4):
+                if domain.cmesh_tdim[k] is not None:
+                    cg = domain.cmesh_tdim[k].cell_groups
+                    if nm.any(cg == group):
+                        td = k
+                        break
 
-            region.cells = nm.where(domain.cmesh.cell_groups == group)[0]
+            if td == 0:
+                raise ValueError('cell group %s does not exist' % group)
+
+            region = Region('leaf', rdef, domain, parse_def=parse_def, tdim=td)
+            region.cells = \
+                nm.where(domain.cmesh_tdim[td].cell_groups == group)[0]
 
         elif token == 'E_COSET':
             raise NotImplementedError('element sets not implemented!')
@@ -97,7 +113,7 @@ def region_leaf(domain, regions, rdef, functions):
         elif token == 'E_VOG':
             group = int(details[3])
 
-            region.vertices = nm.where(domain.cmesh.vertex_groups == group)[0]
+            region.vertices = nm.where(cmesh.vertex_groups == group)[0]
 
         elif token == 'E_VOSET':
             try:
@@ -175,6 +191,56 @@ class Domain(Struct):
         self._region_stack = []
         self._bnf = create_bnf(self._region_stack)
 
+    def create_extra_tdim_region(self, region, functions, tdim):
+        from sfepy.discrete.fem.geometry_element import (GeometryElement,
+            create_geometry_elements)
+        from sfepy.discrete import PolySpace
+        """
+        Create a new region which has its own cmesh with
+        topological dimension tdim.
+        """
+        mesh = self.mesh
+        if mesh.cmesh_tdim[tdim] is not None:
+            raise ValueError(f'cmesh of dimension {tdim} already exists!')
+
+        aux = mesh.from_region(region, mesh, tdim=tdim)
+        cmesh = aux.cmesh
+        new_mat_id = nm.max([nm.max(k.cell_groups) for k in mesh.cmesh_tdim
+                             if k is not None]) + 1
+        cmesh.cell_groups[:] = new_mat_id
+        mesh.cmesh_tdim[tdim] = cmesh
+        mesh.descs += aux.descs
+        mesh.dims += aux.dims
+        mesh.n_el += aux.n_el
+        cmesh.set_local_entities(create_geometry_elements())
+        cmesh.setup_entities()
+
+        gel = GeometryElement(aux.descs[0])
+        if gel.dim > 0:
+            gel.create_surface_facet()
+
+        new_gel_entry = {aux.descs[0]: gel}
+        self.geom_els.update(new_gel_entry)
+
+        self.fix_element_orientation(geom_els=new_gel_entry, force_check=True)
+
+        key = gel.get_interpolation_name()
+
+        gel.poly_space = PolySpace.any_from_args(key, gel, 1)
+        gel = gel.surface_facet
+        if gel is not None:
+            key = gel.get_interpolation_name()
+            gel.poly_space = PolySpace.any_from_args(key, gel, 1)
+
+        select = f'cells of group {new_mat_id}'
+        self._bnf.parseString(select)
+        region = visit_stack(self._region_stack, region_op,
+                             region_leaf(self, self.regions, select,
+                                         functions, tdim))
+        region.field_dim = tdim
+
+        return region
+
     def create_region(self, name, select, kind='cell', parent=None,
                       check_parents=True, extra_options=None, functions=None,
                       add_to_regions=True, allow_empty=False):
@@ -196,12 +262,30 @@ class Domain(Struct):
             print('parsing failed:', select)
             raise
 
+        tdim = self.shape.tdim if parent is None else self.regions[parent].tdim
         region = visit_stack(stack, region_op,
-                             region_leaf(self, self.regions, select, functions))
+                             region_leaf(self, self.regions, select,
+                                         functions, tdim))
+
+        finalize = True
+        eopts = extra_options
+        if eopts is not None:
+            if 'mesh_dim' in eopts:
+                region = self.create_extra_tdim_region(region, functions,
+                                                       eopts['mesh_dim'])
+            if not(eopts.get('finalize', True)):
+                finalize = False
+
+            if 'vertices_from' in eopts:
+                vreg = eopts['vertices_from']
+                region.entities[0] = self.regions[vreg].vertices.copy()
+                finalize = False
+
         region.name = name
         region.definition = select
         region.set_kind(kind)
-        region.finalize(allow_empty=allow_empty)
+        if finalize:
+            region.finalize(allow_empty=allow_empty)
         region.parent = parent
         region.extra_options = extra_options
         region.update_shape()

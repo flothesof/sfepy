@@ -1,5 +1,865 @@
 # created: 20.07.2007 (-1)
 
+.. _2023.2-2023.3:
+
+from 2023.2 to 2023.3
+=====================
+
+- merge pull request #1006 from yosefm/deprecation-warnings
+
+  - Fix some deprecations on NumPy 1.25 and newer setuptools
+  - Explicit dependency, just for safety
+
+- merge pull request #1009 from yosefm/cython_version
+
+  - Restrict Cython
+
+- merge pull request #1008 from bubulk/sfepy-docker
+
+  - Updated sfepy-docker doc.
+
+- merge pull request from #1012 from peppe988/my-feature
+
+  - example for the new non linear terms
+  - Update Non_linear_general_poisson_equation.py
+  - Update and rename Non_linear_general_poisson_equation.py to
+    poisson_nonlinear_material.py
+
+- merge pull request #1013 from rc/test-poisson-nonlinear-material
+
+  - test poisson_nonlinear_material.py in test_examples()
+  - tweak formatting of poisson_nonlinear_material.py example
+
+- merge pull request #1015 from rc/fix-solver-init
+
+  - do not modify conf argument in Solver.__init__()
+
+- merge pull request #1016 from rc/fix-active-tl-fibres-qp-mode
+
+  - fix FibresActiveTLTerm.get_eval_shape() for qp mode
+
+- merge pull request #1017 from vlukes/piezo_flow_example
+
+  - add a new example application
+
+- merge pull request #1020 from vlukes/new_v_dot_grad_s_sensitivity_term
+
+  - fix docstring
+  - new sensitivity term: de_sd_v_dot_grad_s
+  - fix format
+
+- merge pull request #1022 from ostueker/ostueker-patch-1
+
+  - include spaces when joining cflags, configure_cppflags, configure_cflags
+
+- merge pull request #1024 from vlukes/mumps_multiple_rhs, closes #1023
+
+  - implement multiple RHS for mumps solver
+  - multiple RHS for SchurMumps() solver
+  - always make a copy of rhs
+  - fix for using ls_mumps standalone
+
+- merge pull request #1025 from rc/differentiable-terms
+
+  - new Term.diff_info attribute, update .evaluate()
+  - check 'eval' mode availability in Term.evaluate()
+  - support sensitivity dw_mode in Equations.evaluate(), Equation.evaluate() -
+    new diff_vars argument
+  - optionally clear constant_matrices in
+    ElastodynamicsBaseTS.clear_lin_solver()
+
+    - update .__call__()
+    - update BatheTS.clear_lin_solver()
+
+  - clear linear solver in Problem.solve()
+  - allow passing ElastodynamicsBaseTS instance to init_fun(), poststep_fun() -
+    update .__call__()
+  - store pack(), unpack() in ElastodynamicsBaseTS instance in
+    .get_initial_vec()
+  - fix typo in comment
+  - new sfepy/terms/terms_jax.py - JAX-based terms with automatic
+    differentiation
+
+    - new LinearElasticLADTerm (dw_lin_elastic_l_ad)
+    - new LinearElasticYPADTerm (dw_lin_elastic_yp_ad)
+    - new MassADTerm (dw_mass_ad)
+    - new get_strain(), get_stress(), ceval_elasticity_l(),
+      ceval_elasticity_yp(),   ceval_mass()
+
+  - fix process_terms(), typeset_term_syntax() in tools/gen_term_table.py
+  - new sfepy/examples/linear_elasticity/elastodynamic_identification.py
+    example
+
+    - new define(), apply_sensor(), update_pars(), eval_fun(), eval_jac_fd(),
+    eval_jac(), parse_args(), main()
+    - new NewmarkSATS, .create_nlst()
+
+  - docs: sync module index of developer guide with current sources
+  - clear linear solver explicitly in eval_fun(), revert Problem.solve() -
+    update elastodynamic_identification.py example
+  - test_install.py: test elastodynamic_identification.py example
+  - use argument type names in *ADTerm.diff_info - update LinearElasticLADTerm,
+    LinearElasticYPADTerm, MassADTerm
+  - new part argument in Term.get_material_names()
+  - update Equation.evaluate(), Term.evaluate() for actual Term.diff_info
+  - elastodynamic_identification.py: simplify eval_jac_fd()
+  - elastodynamic_identification.py: clear linear solver in eval_jac()
+  - elastodynamic_identification.py: print() -> output()
+  - elastodynamic_identification.py: implement proportional damping in define()
+  - elastodynamic_identification.py: new --alpha, --beta options, identify
+    damping - update efun_grad_par(), update_pars(), eval_fun(), eval_jac(),
+    parse_args(), main()
+
+- merge pull request #1026 from rc/fix-primme-n-eigs-none
+
+  - fix PrimmeEigenvalueSolver.__call__() for no n_eigs provided
+
+.. _2023.1-2023.2:
+
+from 2023.1 to 2023.2
+=====================
+
+- merge pull request #977 from rc/docs-update-support
+
+  - docs: update support
+
+- merge pull request #978 from vlukes/update_users_guide
+
+  - update User's guide: new 'match_dofs' lcbcs
+  - fix punctation
+
+- merge pull request #979 from rc/fix-piezo-ed-example-doctring
+
+  - fix docstring of piezo_elastodynamic.py example
+
+- merge pull request #980 from rc/fix-presolve-in-homogenization
+
+  - do not presolve in MiniAppBase.init_solvers()
+  - replace ls.scipy_direct by ls.auto_direct with presolve in hom. examples
+  - replace ls.auto_iterative by ls.auto_direct with presolve in example
+  - use direct solver for rs correctors in example
+  - set is_linear to True in hom. examples where appropriate
+  - set empty solvers dict to default conf in Problem.__init__()
+  - set automatically use_presolve to True in MiniAppBase.init_solvers()
+
+- merge pull request #960 from yosefm/numpy-distutils-byebye, closes #944
+
+  - initial make files
+  - File removed in master
+  - Add another depenency of terms to CMakeLists
+  - Don't ignore cmake
+  - Build file depending on another directory
+  - Change installation target dir
+  - Make install testable
+  - Change order of commands to what's apparently expected. See
+    https://scikit-build.readthedocsa.io/en/latest/cmake-modules/PythonExtensions.html
+    'Amend the configuration of the library target (created using add_library)
+    ... '
+  - sfepy_common should be static Otherwise it's not found on runtime. Also, no
+    need to install it then.
+  - More builds Should get us done with sfepy.discrete, but tests fail to
+    import (but not `from ... import`)
+  - Get tems.extmods fully built So that sfepy.discrete can import
+  - Install tests as data files so that tests actually run. some of them fail
+    on not finding their meshes, but that's for next commit.
+  - Add meshes directory to install Maybe would be preferable to follow the
+    setuptools current advice and move it into the package, but this branch is
+    already shaking the boat pretty hard, so let's leave it for a later PR.
+  - Fix some missing links
+  - Add mechanics/extmods first time all tests pass
+  - Move common definitions to main CMake file
+  - clean up a bit
+  - Clean up early experiments
+  - Compose compile flags as in numpy distutils
+  - distutils only adds cflags for unices
+  - Handle debug flags in site_cfg
+  - Responsibility for link flags moves to CMake fully Until anyone demands it
+    back. It would be better to do this through CMakeLists anyway.
+  - Install examples too Leave wider pyproject.toml reform for later :)
+  - Feature completion
+  - Use setup_test.py as the new setup.py
+  - Add skbuild to pyproject.toml
+  - Remove 3.9 annotations
+  - Steal distutils hack to install data with package.
+  - Editable install not well-supported by skbuild
+  - Fix: doesn't write the version file.
+  - Run coverage using installed package
+  - Fix relative paths
+  - Windows peculiariuty?
+  - Removals
+  - One more removal
+  - Observe line length in an skbuild-acceptable way
+  - disable C++ in CMake As it will not be found in the conda recipe and is not
+    actually needed, since the conda recipe always specified onlt a C compiler.
+  - Languages also inb setup.py
+  - Use Ninja generator explicitly
+  - Add new build dependencies also to docs
+  - Keep support for space-separated flag strings
+  - Manually include compiled files in manifest
+  - replace global-include by recursive-include, exclude _skbuild
+  - Catch manifest up with removed file in master
+
+- merge pull request #987 from rc/fix-missing-mumps_ls-attribute
+
+  - fix no mumps_ls attribute in MUMPSSolver.clear() (via .__del__())
+
+- merge pull request #988 from rc/fix-resview-for-pyvista-0.39.0
+
+  - fix make_grid_from_mesh() for pyvista>=0.39.0
+
+- merge pull request #989 from rc/remove-save-field-meshes
+
+  - remove unused Problem.save_field_meshes() - Field.write_mesh() was removed
+    already in 2011.1
+  - remove save_field_meshes from default options
+  - simple.py: remove --save-field-meshes option
+
+- merge pull request #990 from rc/document-file-format-option
+
+  - docs: document file_format option in users guide, clean up
+
+- merge pull request #991 from rc/update-lobpcg-init
+
+  - initialize lobpcg() in LOBPCGEigenvalueSolver.__call__() by random data -
+    seed fixed for repeatability
+
+- merge pull request #992 from rc/resview-factor-by-warp
+
+  - compute factor in pv_plot() from warp field if given
+
+- merge pull request #994 from rc/resview-window-title
+
+  - resview.py: set window title to filename(s), new make_title() - update
+    pv_plot(), main()
+
+- merge pull request #995 from vlukes/primme_eigensolver
+
+  - new eigenvalue solver: PRIMME
+  - set default value of 'tol' to 0
+  - conf.which() -> conf.which.upper()
+  - return eigenvectors?
+  - add eig.primme to test_eigenvalue_solvers()
+
+- merge pull request #982 from vlukes/modal_analysis_declarative
+
+  - new example: simple modal analysis in declarative description
+  - update docstring: running the simulation
+  - add the example to tests
+  - increase solver tolerance
+  - new mesh (wheelset.vtk) and eigenvalue solver (primme)
+  - new mesh file
+  - update tests: modal_analysis_declarative.py uses the optional PRIMME solver
+  - update mesh
+  - update docstring of modal_analysis_declarative.py
+  - gen_gallery.py: add custom view for modal_analysis_declarative.py example
+
+- merge pull request #993 from rc/remove-ordering-variables-attributes
+
+  - remove Variable.reset(), ._count, ._orders, ._all_var_names
+
+    - update .__init__(), ._set_kind()
+    - update Variables.from_conf()
+
+  - update Variables.setup_ordering()
+  - do not call .setup_ordering() in Variables.from_conf(), .__init__() - it is
+    called in .setup_ordering()
+  - update transform_equations_ed() for new Variables.setup_ordering()
+  - fix typo in Variables.setup_ordering()
+
+- merge pull request #996 from vlukes/update_modal_analysis_example update
+  example: add comparison to ansys results
+
+  - update example: add comparison to Ansys results
+
+- merge pull request #997 from rc/remove-distutils-remains, closes #984
+
+  - update site_cfg_template.py
+  - replace distutils in tools/build_helpers.py, remove
+    generate_a_pyrex_source(). update Clean
+  - replace LooseVersion by parse_version()
+  - replace find_executable() with which() in test_gen_mesh_from_geom()
+  - fix warning and wrong type in CMesh.create_new()
+  - fix error messages in GmshIO
+  - fix matplotlib warning in time_heat_equation_multi_material.py exemple,
+    update post_process_hook()
+  - update warning filters in pytest.ini
+
+- merge pull request #1001 from peppe988/my-feature
+
+  - new non linear term
+  - Update terms_diffusion.py
+  - Update terms_volume.py
+  - updated
+  - solved a few whitespace errors
+  - allow callable in place of shape in make_term_args()
+  - update arg_shapes of NonlinearDiffusionTerm, NonlinearVolumeForceTerm
+
+    - add missing import
+    - test_term_call_modes.py::test_term_call_modes now passes
+
+  - fixed latex mode and empty lines
+  - fix indent
+
+.. _2022.4-2023.1:
+
+from 2022.4 to 2023.1
+=====================
+
+- merge pull request #917 from rc/fix-typos
+
+  - fix typos
+
+- merge pull request #918 from rc/convert-mesh-force-3d
+
+  - convert_mesh.py: new --3d option in main()
+
+- merge pull request #919 from rc/resview-camera-position-handling
+
+  - resview.py: unify camera position handling in animation and normal modes
+
+    - set default value of --view option to None
+    - --camera-position and --view have precedence over --2d-view
+    - new _get_cpos(), update main()
+
+- merge pull request #920 from vlukes/on_screen_animations
+
+  - fix the off-screen animation issue mentioned in #919
+
+- merge pull request #921 from rc/mass-term-amm-rmm
+
+  - new sfepy/terms/terms_mass.py: new MassTerm (de_mass)
+  - update MassTerm docstring
+  - docs: sync module index of developer guide with current sources
+  - new ReciprocalMassMatrixSolver (ls.rmm) (WIP) - new .__init__(),
+    .init_rmm(), .__call__()
+  - update MassTerm.get_function() for residual mode
+  - rename ReciprocalMassMatrixSolver -> RMMSolver, update docstring
+  - obey active_only in RMMSolver.init_rmm(), update .__call__()
+  - use dedicated NoNLS for RMM in CentralDifferenceTS - update
+    ._create_nlst_a(), .create_nlst()
+  - explain a0 in RMMSolver.__call__()
+  - new output_dir define() argument in elastodynamic.py example
+  - update elastodynamic.py example to show RMMSolver use, support mass
+    lumping - new mass_beta, mass_lumping, fast_rmm define() arguments
+  - set tscedl as default in define() of elastodynamic.py example
+  - new dt, edt_safety define() arguments, update docstring of elastodynamic.py
+  - update docstring of MassTerm
+  - update docstring of RMMSolver
+  - update docstrings of VelocityVerletTS, CentralDifferenceTS
+  - optimize beta == 0 branch in fun() in MassTerm.get_function()
+  - new test_rmm_solver(), update define() in test_ed_solvers.py
+  - improve code for ths storing in test_ed_solvers()
+  - update make_term_args(), _test_single_term() for MassTerm - fixes
+    test_term_call_modes()
+
+- merge pull request #922 from rc/variable-has-ebc
+
+  - new FieldVariable.has_ebc(), update Variables.has_ebc(), add verbose
+    argument
+
+- merge pull request #923 from rc/resview-animation-cpos
+
+  - resview.py: fix and simplify setting camera position in animation mode
+
+- merge pull request #924 from vlukes/match_dofs
+
+  - new MatchDOFsOperator: tie DOFs of two fields
+
+- merge pull request #928 from rc/sfepy-view-png-anim
+
+  - resview.py: support saving animation as PNG sequence in main()
+
+- merge pull request #925 from vlukes/multi_topo
+
+  - new copy_coors argument in CMesh.from_data()
+  - read mesh contaning cells of various topological dimensions
+  - cmesh linked to regions according to the topological dimension of cells
+  - update FEDomain.fix_element_orientation(): check "real" cells only
+  - cleanup: remove six
+  - link cmeshs to fields by topological dimensions
+  - update mappings
+  - update DG field
+  - update IGA domain
+  - update recover_micro_hook()
+  - fix domain.region_leaf(): 'KW_COG' -> 'E_COG'
+  - fix assert_equal(): add nm.number to assert_base_types
+  - move back to cmesh (cmesh_highest -> cmesh)
+  - fix _check_region(): region.cmesh can not be None
+  - update docstrings
+
+- merge pull request #929 from vlukes/new_example
+
+  - add link to 'reinforced shell beam' example
+
+- merge pull request #930 from vlukes/fix_multi_topo
+
+  - new tdim argument of function Region.light_copy()
+
+- merge pull request #935 from vlukes/update_mirror_regions
+
+  - fix region.copy(): call light_copy with tdim=self.tdim argument
+  - fig setup_mirror_region(): return mirror_name if ret_name is True
+  - update mirror region: mirror with tdim = dim - 1
+  - replace 'is_trace' by 'trace_region'
+  - fields_base.py clean-up
+
+- merge pull request #934 from yosefm/numpy-dep-py39
+
+  - Fix build dependency for Python 3.9
+
+- merge pull request #936 from rc/multilinear-terms-surface-extra
+
+  - support surface_extra integration in ExpressionBuilder - update
+    .add_virtual_arg(), .add_state_arg(), ExpressionArg.get_bf()
+  - new SurfaceFluxOperatorTerm (de_surface_flux)
+
+- merge pull request #939 from yosefm/fix-pyvista-deprecation
+
+  - Pyvista deprecation: must provide inplace parameter
+
+- merge pull request #910 from flothesof/add_github_ci
+
+  - add CI script
+  - reformat ci file
+  - try other branch name
+  - disable build on push to master and add documentation
+  - add link to CI file in description
+  - add changes proposed by @rc
+
+- merge pull request #940 from yosefm/fix-elastodynamic-solver-return
+
+  - Return last vec from elastodynamic solvers
+
+- merge pull request #943 from yosefm/remove-setuptools-limitation
+
+  - Remove setuptools limitation
+
+- merge pull request #946 from rc/update-variable-ts-print-info
+
+  - use supplied n_step for print info in VariableTimeStepper.set_from_data()
+
+- merge pull request #945 from yosefm/explain-missing-odes
+
+  - Explain the relations between variables in example Elastodynamic problem
+    defines 3 "independent" variables that are dependent by solver magic.
+  - CR tweaks
+
+- merge pull request #937 from vlukes/mappings_refactoring
+
+  - unification of VolumeMapping and SurfaceMapping
+  - element diameters calculated in domain, not in CMapping
+  - remove refmaps.c, replaced by DMapping class and eval_mapping_data_in_qp()
+  - employ DMapping in FE and IGA mappings
+  - update FE fields for new mapping
+  - use CMapping instead of DMapping when callig C functions
+  - translete DMapping to CMapping in fargs for C functions
+  - CMapping.shape removed, use DMapping.n_el instead
+  - add docstring to eval_mapping_data_in_qp()
+  - call einsum with `optimize=True`
+  - rename DMapping -> PyCMapping
+  - rena coorIn to coor in eval_mapping_data_in_qp()
+  - improve docstrings
+  - clean-up in CMapping
+  - update docstrings
+  - rename (coor, weight) to (coors, weights)
+  - move raise_if_too_large() back
+  - fix PyCMapping.bfg computation
+  - improve calculation efficiency - use dets_fast and invs_fast
+  - use dets_fast() in invs_fast()
+  - fix 2x2 inversion
+  - test_install.py: tweak tolerance to accommodate different rounding errors
+
+- merge pull request #947 from rc/fix-surface-region-check
+
+  - fix region check in Term.setup_integration() for 1D, 2D
+
+- merge pull request #950 from rc/fix-region-copy
+
+  - fix Region.copy() to preserve region kind
+
+- merge pull request #949 from vlukes/update_de_grad_term
+
+  - de_grad term: grad can be multiplied by vector or matrix
+  - more readable code
+
+- merge pull request #951 from rc/pass-variable-to-setter
+
+  - update FieldVariable._get_setter() to pass variable to setter functions
+  - update examples for variable argument of setter functions
+  - docs: update users guide for variable argument of setter functions
+
+- merge pull request #952 from rc/fix-typo
+
+  - fix typo in debug code in divgrad_build_gtg()
+
+- merge pull request #953 from rc/seismic-load-example
+
+  - new apply_ebc argument of Variables.set_state()
+  - apply EBCs in prestep_fun(), poststep_fun() - update
+    Problem.get_tss_functions()
+
+    - prestep_fun(), poststep_fun() return vec
+    - fixes seismic loading, hyperelastic.py with active_only set to False etc.
+
+  - update prestep_fun(). poststep_fun() calls to return vec
+  - new sfepy/examples/linear_elasticity/seismic_load.py
+  - update docstring and comments in elastodynamic.py example
+  - gen_gallery.py: add custom view for seismic_load.py example
+  - clean up get_ebcs() in seismic_load.py
+  - test seismic_load.py in test_examples()
+
+- merge pull request #954 from vlukes/mappings_refactoring_ii
+
+  - VolumeMapping and SurfaceMapping -> FEMapping
+  - fix docstring of Field.get_mapping()
+  - fields_base.py: remove six
+  - FEMapping.get_mapping(): simplify handling of bf
+  - fix naming: base function -> basis function
+  - eval_mapping_data_in_qp(): fix docstring
+
+- merge pull request #956 from rc/fix-mat-by-region-cell-facet, closes #955
+
+  - fix get_constants() in ConstantFunctionByRegion for mixed cell/facet
+    regions
+  - make Region.get_cell_indices() consistent with its definition, simplify
+
+- merge pull request #957 from vlukes/rename_integration
+
+  - rename integration: volume->cell, surface->facet,
+    surface_extra->facet_extra
+  - update test_term_call_modes
+  - rename integration II.
+  - update fields and variables
+  - remove unused argument 'integration' from get_econn()
+  - update region.set_kind(): edge, face -> facet
+  - fix test: volume -> cell
+  - get_data_shape(): fix docstrings
+
+- merge pull request #961 from rc/get-blocks-stats
+
+  - new get_blocks_stats()
+  - new test_get_blocks_stats()
+
+- merge pull request #962 from vlukes/fix_link_to_releases
+
+  - fix download link: -> https://github.com/sfepy/sfepy/tags
+
+- merge pull request #958 from vlukes/unification_of_fefields
+
+  - unification of VolumeField and SurfaceField, only FEField remains
+  - rearange function ordering in FEField
+  - fix format
+  - replace reference to VolumeField and SurfaceField by FEField
+  - FEField._setup_geoemtry(): fix region.kind check
+  - enable einsum optimization
+  - FEField: setup bubble dofs for surface field
+  - docs: replace volume -> cell, surface -> facet
+  - docs: fix typo
+
+- merge pull request #964 from rc/make-any_dof_conn-configurable
+
+  - update docstrings of Equations.get_graph_conns(), .create_matrix_graph() -
+    volume -> cell, surface -> facet
+  - add any_dof_conn argument to relevant functions, support it in conf.options
+
+    - update eval_equations()
+    - update Problem.update_equations(), .time_update(), .select_bcs(),
+    .evaluate(), .eval_equations()
+
+  - docs: update users guide
+
+- merge pull request #966 from rc/resview-plot-on-step-change-only
+
+  - return early from pv_plot() when step stays the same
+
+- merge pull request #967 from rc/plot-times-tight-layout
+
+  - plot_times.py: use tight layout
+
+- merge pull request #969 from lokik/scalar_bar_limits
+
+  - Allow one side of scalar_bar_limits to be computed in resview
+
+- merge pull request #970 from vlukes/update_homogenization
+
+  - update CoefExprPar class: variable setting is not required
+  - fix recovery for 2D plates
+
+- merge pull request #971 from rc/resview-fix-for-no-mat-id
+
+  - fix pv_plot() for meshes without mat_id array
+
+- merge pull request #968 from rc/update-elastodynamics, closes #972
+
+  - remove Python 2 compatibility code
+  - new TimeSteppingSolver.set_dof_info(), use in Problem.solve()
+  - update gen_multi_vec_packing() for extra variables (multiphysics)
+  - support extra variables in ElastodynamicsBaseTS
+
+    - update .get_matrices(), .get_a0(), .get_initial_vec()
+    - original unpacking supported in .get_initial_vec() for compatibility
+
+  - update NewmarkTS for extra variables - remove ._create_nlst_a(), update
+    .create_nlst(), .step()
+  - simplify gen_multi_vec_packing() - update
+    ElastodynamicsBaseTS.get_initial_vec(), NewmarkTS.step()
+  - fix NewmarkTS.create_nlst()
+  - update create_arg_parser() for d+name derivatives, new allow_derivatives
+    arg - update create_bnf() (no change in behaviour)
+  - add allow_derivatives arg to Term.setup(), .setup_formal_args()
+  - update Term.assemble_to() to ignore d+name derivatives
+  - do not setup terms twice when calling Equation.from_desc() - new setup
+    argument of Equation.__init__()
+  - new transform_equations_ed()
+  - support transforming elastodynamics equations in Problem.set_solver()
+  - update ElastodynamicsBasicTSC for extra variables
+
+    - extra variables are not used for time step control
+    - update .get_scaled_errors, .get_initial_dt(), .__call__()
+
+  - new sfepy/examples/multi_physics/piezo_elastodynamic.py
+  - test piezo_elastodynamic.py in test_examples()
+  - gen_gallery.py: add custom view for piezo_elastodynamic.py example
+  - docs: update latex_elements in conf.py
+  - remove debug print in transform_equations_ed()
+  - new auto_transform_equations option in Problem.set_solver(), transform only
+    once
+  - docs: update users guide
+  - simplify seismic_load.py example by using equations transformation
+  - fix Problem.set_solver() for setting nls
+  - set default value of auto_transform_equations to False - update
+    seismic_load.py, piezo_elastodynamic.py examples, docs
+  - update docstring of apply_ebc_to_matrix()
+  - apply EBCs to vec in Evaluator when active_only is False
+
+    - update .eval_residual(), .eval_tangent_matrix()
+    - the tangent matrix is usually computed just after the residual, so in
+      that case applying EBCs there is not needed, but the overhead is minimal
+
+  - update Problem.get_tss_functions() - do not apply EBCs in prestep_fun()
+  - change default output directory in piezo_elastodynamic.py example
+  - new active_only define() argument in elastodynamics examples - update
+    elastodynamic.py, seismic_load.py, piezo_elastodynamic.py
+  - set default value of allow_derivatives to False - update
+    create_arg_parser(), Term.setup(), .setup_formal_args()
+  - add allow_derivatives argument to Equations.from_conf(),
+    Equation.from_desc() - update Problem.set_equations(), Terms.setup()
+  - update Problem.set_solver() to check for solver.var_names
+  - new ElastodynamicsBaseTS._common_parameters, use in subclasses
+  - new var_names solver option in ElastodynamicsBaseTS._common_parameters -
+    update .__init__(), .get_initial_vec()
+  - add var_names to elastodynamics solver options in elastodynamic.py example
+  - update docstring of elastodynamic.py example
+  - make var_names optional in ElastodynamicsBaseTS._common_parameters - update
+    .__init__(), .get_initial_vec()
+  - add var_names to elastodynamics solver options in test_ed_solvers.py
+  - new test_active_only() in test_ed_solvers.py - update get_ic() in define()
+    for 2D
+
+- merge pull request #975 from vlukes/fix_nonlinhomog_example
+
+  - replace term.integration by term.act_integration
+  - fix MPI logging
+
+.. _2022.3-2022.4:
+
+from 2022.3 to 2022.4
+=====================
+
+- merge pull request #880 from vlukes/update_hdf5meshio_write
+
+  - update HDF5MeshIO.write(): dump region_name
+
+- merge pull request #878 from rc/fix-warnings
+
+  - fix warning in test_base_functions_delta()
+  - fix file not closed in Mesh3DMeshIO.read()
+  - store connectivity in XYZMeshIO.write() as integers, update xyz meshes
+  - fix sparse matrix comparison warning in test_hdf5_meshio()
+  - fix MumpsSolver.__init__()
+  - fix MUMPSSolver.__init__() for MUMPS not installed
+  - silence SparseEfficiencyWarning in apply_ebc_to_matrix()
+  - update gmres callback setup in ScipyIterative.__call__()
+  - silence SparseEfficiencyWarning in project_to_facets()
+  - silence SparseEfficiencyWarning in ScipyDirect.presolve()
+  - new pytest.ini
+  - clean up coefficients.py
+  - fix remaining invalid escape sequence warnings
+  - update pytest.ini
+  - fix ScipyIterative.__call__() for scipy < 1.4.0
+  - update pytest.ini: do not raise error on warnings
+
+- merge pull request #881 from rc/sfepy-test
+
+  - new sfepy/scripts/run_tests.py
+  - new sfepy-test entry point in setup.py
+  - docs: update installation/testing instructions
+
+- merge pull request #888 from rc/allow-mesh-in-place-filename
+
+  - allow Mesh instance in place of filename in
+    PDESolverApp.setup_output_info()
+
+- merge pull request #892 from rc/fix-eig-arguments
+
+  - rename method argument of eig() to solver_kind, fixes shadowing method
+    parameter
+  - update eig() calls
+
+- merge pull request #887 from rc/no-save-in-corrector-calls
+
+  - do not save results in problem.solve() calls in corrector classes - update
+    CorrNN, CorrN, CorrOne, CorrEqPar
+
+- merge pull request #891 from heczis/fix_simple_phonon_args, closes #883, #884
+
+  - Fix typo in docstring
+  - Do not plot without band gaps or dispersion
+  - Make band-gaps exclusive to dispersion and phase-velocity
+  - Fix AcousticBandGapsApp.setup_options
+  - Use parser.error instead of raise
+  - Make all band-gaps related options available simultaneously
+  - Facelift plotting functions
+  - Remove show and new_axes from plotting functions
+  - Separate log files for band_gaps and dispersion
+
+- merge pull request #895 from rc/fix-simplify-log-plot
+
+  - use plt.tight_layout() in every LogPlotter.apply_commands() call
+  - unregister Log.terminate() in atexit on successful termination
+  - do not use threading in LogPlotter.__call__(), update .apply_commands()
+  - use spawn start method instead of fork in Log.__call__() to start
+    LogPlotter - update .__init__()
+
+- merge pull request #897 from rc/fix-log-plotter-labels
+
+  - plot labels and vlines in every LogPlotter.apply_commands() call - fixes
+    not plotting labels and vlines when show_legends was False
+
+- merge pull request #906 from rc/fix-sfepy-test-explicit-paths
+
+  - fix test() for explicit paths passed to run_tests.py (sfepy-test)
+
+- merge pull request #904 from flothesof/transient_poisson_multimaterial_example
+
+  - first version of example
+  - finish docstring of example
+  - take into account comments from PR
+  - adding post processing
+  - fix line lengths
+  - fix run examples sphinx formatting
+  - make usage path relative to sfepy package dir like in other examples
+  - adding example to list of examples to be tested
+  - removing plt.show call to make example testable
+  - add custom gallery view for time_heat_equation_multi_material.py example
+  - change ordering in test
+
+- merge pull request #908 from fix-pyvista-mesh-style
+
+  - fix pv_plot() for pyvista 0.37.0
+  - show edges with glyphs in pv_plot() only when requested explicitly
+
+- merge pull request #902 from rc/elastodynamics-time-step-control
+
+  - new TimeStepController
+  - add tsc argument to TimeSteppingSolver.__init__(), .__call__()
+  - new FixedTCS, ElastodynamicsBasicTCS in new
+    sfepy/solvers/ts_controllers.py - update solver_table
+  - create VariableTimeStepper in ElastodynamicsBaseTS.__init__() when
+    adapting - for non-fixed TimeStepController subclasses
+  - support time step control in GeneralizedAlphaTS, new .step(), split
+    .__call__()
+  - remove .dts attribute of VariableTimeStepper
+  - de-struct arguments of
+    {TimeStepController,ElastodynamicsBasicTCS}.__call__() - update
+    GeneralizedAlphaTS.__call__()
+  - new TimeStepController.get_initial_dt()
+  - fix adaptive time stepping in GeneralizedAlphaTS.__call__() - do not update
+    dt in-place when the step is accepted
+  - add comment to ElastodynamicsBaseTS.__init__()
+  - new TimesSequenceTCS, new .__init__(), get_initial_dt(), .__call__()
+  - move ElastodynamicsBaseTS._create_nlst_*() to particular classes
+
+    - move ._create_nlst_a() to NewmarkTS
+    - move ._create_nlst_u() to BatheTS
+
+  - split/move GeneralizedAlphaTS.__call__() into new
+    ElastodynamicsBaseTS.__call__() - new GeneralizedAlphaTS.__init__(), update
+    .step()
+  - new define(), test_ed_solvers() in new
+    sfepy/tests/test_elastodynamic_solvers.py
+  - pass prestep_fun to .step() in ElastodynamicsBaseTS.__call__() - update
+    GeneralizedAlphaTS.step()
+  - new {VelocityVerletTS, NewmarkTS, BatheTS}.step() replacing .__call__() -
+    use ElastodynamicsBaseTS.__call__() for all elastodynamics solvers
+  - new ElastodynamicsBasicTCS.get_scaled_errors(), update .__call__()
+  - fix typo (TCS -> TSC)
+  - new ElastodynamicsPIDTSC, new .__init__(), .__call__() - update docstrings
+  - rename test_elastodynamic_solvers.py -> test_ed_solvers.py
+  - new ElastodynamicsBaseTS.clear_lin_solver(), update .__call__()
+  - new BatheTS.clear_lin_solver() - fix for adaptive time step control
+  - test time step controllers in test_ed_solvers(), update define()
+  - mark test_ed_solvers() as slow
+  - halve t1, clean up test_ed_solvers()
+  - gen_solver_table.py: update for TimeStepController
+  - docs: sync module index of developer guide with current sources
+  - docs: add time step controllers table to users guide
+  - update Problem.set_conf_solvers(), .init_solvers() for time step
+    controllers
+
+    - update .__init__()
+    - support time step controllers in problem definition files
+
+  - simplify test_ed_solvers() by using Problem.init_solvers() - rename
+    _list_elastodynamic_solvers() -> _list_solvers()
+  - illustrate time step control in elastodynamic.py example, new define()
+  - gen_gallery.py: add custom view for elastodynamic.py example
+  - use error_order parameter in ElastodynamicsBasicTSC.__call__() - update
+    ElastodynamicsPIDTSC._parameters
+  - new ElastodynamicsBasicTSC.get_initial_dt(), guess_dt0 parameter - new
+    eval_scaled_norm(), update .get_scaled_errors()
+  - tweak ElastodynamicsBasicTSC parameter description
+  - new ElastodynamicsLinearTSC, new .__init__(), .__call__()
+  - update test_ed_solvers(), define()
+  - show ElastodynamicsLinearTSC use in elastodynamic.py example, update
+    define()
+
+- merge pull request #912 from rc/gallery-camera-position
+
+  - gen_gallery.py: support camera_position option in custom settings - update
+    resview_plot(), generate_images()
+
+- merge pull request #909 from flothesof/helmholtz_example, closes #907
+
+  - first version helmholtz
+  - improve example following review
+  - mesh improvement around source region
+  - add to test_declarative_examples
+  - format long lines
+  - fix LaTeX in docstring
+  - gen_gallery.py: add custom view for helmholtz_apartment.py example
+  - merge materials into a single materials dictionary to reduce number of
+    terms in equations
+  - remove unused import
+
+- merge pull request #913 from rc/misc-fixes
+
+  - fix test_eigenvalue_solvers() to obey can_fail when solving
+  - docs: sync module index of developer guide with current sources
+
+- merge pull request #914 from rc/central-difference-tss
+
+  - new CentralDifferenceTS - new ._create_nlst_a(), .create_nlst(), .step()
+  - test CentralDifferenceTS in test_ed_solvers(), update define()
+  - store u as function in CentralDifferenceTS like in other ED solvers
+  - add ts.central_difference to elastodynamic.py example, fix line lengths
+  - fix line length, update comments in define() of test_ed_solvers.py
+  - update CentralDifferenceTS docstring
+
+- merge pull request #915 from rc/fix-multilinear-terms-output-axes-order
+
+  - fix undefined output axes order in ExpressionBuilder.build()
+
 .. _2022.2-2022.3:
 
 from 2022.2 to 2022.3

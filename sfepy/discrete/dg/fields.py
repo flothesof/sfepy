@@ -11,7 +11,7 @@ from sfepy.base.base import (output, assert_, Struct)
 from sfepy.discrete import Integral, PolySpace
 from sfepy.discrete.common.fields import parse_shape
 from sfepy.discrete.fem.fields_base import FEField
-from sfepy.discrete.fem.mappings import VolumeMapping
+from sfepy.discrete.fem.mappings import FEMapping
 
 
 def get_unraveler(n_el_nod, n_cell):
@@ -122,7 +122,7 @@ def get_gel(region):
     gel :
         base geometry element of the region
     """
-    cmesh = region.domain.cmesh
+    cmesh = region.cmesh
     for key, gel in six.iteritems(region.domain.geom_els):
         ct = cmesh.cell_types
         if (ct[region.cells] == cmesh.key_to_index[gel.name]).all():
@@ -292,9 +292,9 @@ class DGField(FEField):
         """Forces self.domain.mesh to build necessary conductivities
         so they are available in self.get_nbrhd_dofs
         """
-        self.region.domain.mesh.cmesh.setup_connectivity(self.dim, self.dim)
-        self.region.domain.mesh.cmesh.setup_connectivity(self.dim - 1, self.dim)
-        self.region.domain.mesh.cmesh.setup_connectivity(self.dim, self.dim - 1)
+        self.region.cmesh.setup_connectivity(self.dim, self.dim)
+        self.region.cmesh.setup_connectivity(self.dim - 1, self.dim)
+        self.region.cmesh.setup_connectivity(self.dim, self.dim - 1)
 
     def get_coor(self, nods=None):
         """Returns coors for matching nodes
@@ -316,8 +316,8 @@ class DGField(FEField):
             nods = self.bubble_dofs
 
         cells = self.dofs2cells[nods]
-        coors = self.domain.mesh.cmesh.get_centroids(self.dim)[cells]
-        eps = min(self.domain.cmesh.get_volumes(self.dim)) / (self.n_el_nod + 2)
+        coors = self.region.cmesh.get_centroids(self.dim)[cells]
+        eps = min(self.region.cmesh.get_volumes(self.dim)) / (self.n_el_nod + 2)
         if self.dim == 1:
             extended_coors = nm.zeros(nm.shape(coors)[:-1] + (2,))
             extended_coors[:, 0] = coors[:, 0]
@@ -521,7 +521,7 @@ class DGField(FEField):
 
         dim, n_cell, n_el_facets = self.get_region_info(region)
 
-        cmesh = region.domain.mesh.cmesh
+        cmesh = region.cmesh
         cells = region.cells
 
         facet_neighbours = nm.zeros((n_cell, n_el_facets, 2), dtype=nm.int32)
@@ -864,7 +864,7 @@ class DGField(FEField):
 
         dim, n_cell, n_el_facets = self.get_region_info(region)
 
-        cmesh = region.domain.mesh.cmesh
+        cmesh = region.cmesh
         normals = cmesh.get_facet_normals()
         normals_out = nm.zeros((n_cell, n_el_facets, dim))
 
@@ -913,7 +913,7 @@ class DGField(FEField):
 
         dim, n_cell, n_el_facets = self.get_region_info(region)
 
-        cmesh = region.domain.mesh.cmesh
+        cmesh = region.cmesh
 
         if dim == 1:
             vols = nm.ones((cmesh.num[0], 1))
@@ -933,7 +933,7 @@ class DGField(FEField):
 
         return vols_out
 
-    def get_data_shape(self, integral, integration='volume', region_name=None):
+    def get_data_shape(self, integral, integration='cell', region_name=None):
         """Returns data shape
         (n_nod, n_qp, self.gel.dim, self.n_el_nod)
 
@@ -950,7 +950,7 @@ class DGField(FEField):
         data_shape : tuple
         """
 
-        if integration in ('volume',):
+        if integration in ('cell',):
             # from FEField.get_data_shape()
             _, weights = integral.get_qp(self.gel.name)
             n_qp = weights.shape[0]
@@ -963,18 +963,15 @@ class DGField(FEField):
 
         return data_shape
 
-    def get_econn(self, conn_type, region, is_trace=False, integration=None):
+    def get_econn(self, conn_type, region, trace_region=None):
         """Getter for econn
 
         Parameters
         ----------
-        conn_type : string or Struct
-            'volume' is only supported
+        conn_type : tuple or string
+            ('cell', dim) or 'cell' is only supported
         region : sfepy.discrete.common.region.Region
-            
-        is_trace : ignored
-             (Default value = False)
-        integration : ignored
+        trace_region : ignored
              (Default value = None)
 
         Returns
@@ -984,10 +981,9 @@ class DGField(FEField):
             connectivity information
 
         """
+        ct = conn_type[0] if isinstance(conn_type, tuple) else conn_type
 
-        ct = conn_type.type if isinstance(conn_type, Struct) else conn_type
-
-        if ct == 'volume':
+        if ct == 'cell':
             if region.name == self.region.name:
                 conn = self.econn
             else:
@@ -997,29 +993,21 @@ class DGField(FEField):
 
         return conn
 
-    def setup_extra_data(self, geometry, info, is_trace):
+    def setup_extra_data(self, info):
         """This is called in create_adof_conns(conn_info, var_indx=None,
                                                 active_only=True, verbose=True)
         for each variable but has no effect.
 
         Parameters
         ----------
-        geometry :
-            ignored
-            
         info :
             set to self.info
-            
-        is_trace :
-            set to self.trace
-
         """
         # placeholder, what is this used for?
 
         # dct = info.dc_type.type
 
         self.info = info
-        self.is_trace = is_trace
 
     def get_dofs_in_region(self, region, merge=True):
         """Return indices of DOFs that belong to the given region.
@@ -1046,7 +1034,7 @@ class DGField(FEField):
         else:
             # return indices of cells adjacent to boundary facets
             dim = self.dim
-            cmesh = region.domain.mesh.cmesh
+            cmesh = region.cmesh
             bc_cells = cmesh.get_incident(dim, region.facets, dim - 1)
             bc_dofs = self.bubble_dofs[bc_cells]
             dofs.append(bc_dofs)
@@ -1096,13 +1084,13 @@ class DGField(FEField):
 
         Returns
         -------
-        mapping : VolumeMapping
+        mapping : FEMapping
         """
         domain = self.domain
         coors = domain.get_mesh_coors(actual=True)
         dconn = domain.get_conn()
         # from FEField
-        if integration == 'volume':
+        if region.kind == 'cell':
             qp = self.get_qp('v', integral)
             # qp = self.integral.get_qp(self.gel.name)
             iels = region.get_cells()
@@ -1112,23 +1100,19 @@ class DGField(FEField):
             bf = self.get_base('v', 0, integral, iels=iels)
 
             conn = nm.take(dconn, iels.astype(nm.int32), axis=0)
-            mapping = VolumeMapping(coors, conn, poly_space=geo_ps)
-            vg = mapping.get_mapping(qp.vals, qp.weights, poly_space=ps,
-                                     ori=self.ori,
-                                     transform=self.basis_transform)
-
-            out = vg
+            mapping = FEMapping(coors, conn, poly_space=geo_ps)
+            out = mapping.get_mapping(qp.vals, qp.weights, bf, poly_space=ps,
+                                      ori=self.ori,
+                                      transform=self.basis_transform)
         else:
             raise ValueError('unsupported integration geometry type: %s'
-                             % integration)
+                             % region.kind)
 
         if out is not None:
             # Store the integral used.
             out.integral = integral
             out.qp = qp
             out.ps = ps
-            # Update base.
-            out.bf[:] = bf
 
         if return_mapping:
             out = (out, mapping)

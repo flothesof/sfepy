@@ -213,7 +213,7 @@ class ExpressionArg(Struct):
             # # axis 0: cells, axis 1: node, axis 2: component
             # dofs = dofs_vec[conn]
             # axis 0: cells, axis 1: component, axis 2: node
-            conn = arg.field.get_econn(self.term.get_dof_conn_type(),
+            conn = arg.field.get_econn(self.term.get_dof_conn_type(arg.name),
                                        self.term.region)
             dofs = dofs_vec[conn].transpose((0, 2, 1))
             if arg.n_components == 1:
@@ -229,7 +229,14 @@ class ExpressionArg(Struct):
 
     def get_bf(self, expr_cache):
         ag, _ = self.term.get_mapping(self.arg)
-        bf = ag.bf
+        if self.term.integration == 'facet_extra':
+            sd = self.arg.field.extra_data[f'sd_{self.term.region.name}']
+            _bf = self.arg.field.get_base(sd.bkey, 0, self.term.integral)
+            bf = _bf[sd.fis[:, 1], ...]
+
+        else:
+            bf = ag.bf
+
         key = 'bf{}'.format(id(bf))
         _bf  = expr_cache.get(key)
         if bf.shape[0] > 1: # cell-depending basis.
@@ -359,7 +366,8 @@ class ExpressionBuilder(Struct):
             self.add_bfg(iin, ein, arg.name)
 
         else:
-            self.add_bf(iin, ein, arg.name)
+            cell_dep = arg.term.integration == 'facet_extra'
+            self.add_bf(iin, ein, arg.name, cell_dependent=cell_dep)
 
         out_letters = iin
 
@@ -390,7 +398,8 @@ class ExpressionBuilder(Struct):
             self.add_bfg(iin, ein, arg.name)
 
         else:
-            self.add_bf(iin, ein, arg.name)
+            cell_dep = arg.term.integration == 'facet_extra'
+            self.add_bf(iin, ein, arg.name, cell_dependent=cell_dep)
 
         out_letters = iin
 
@@ -490,7 +499,9 @@ class ExpressionBuilder(Struct):
             ifree = [ii for ii in find_free_indices(subscripts)
                      if ii not in self.out_subscripts[ia]]
             if ifree:
-                self.out_subscripts[ia] += ''.join(ifree)
+                # Lexicographic ordering of output indices, i.e.
+                # (n_comp, dim) or (dim, n_comp) <=> i.j or j.i
+                self.out_subscripts[ia] += ''.join(sorted(ifree))
 
     @staticmethod
     def join_subscripts(subscripts, out_subscripts):
@@ -1178,7 +1189,7 @@ class EIntegrateOperatorTerm(ETermBase):
     arg_types = ('opt_material', 'virtual')
     arg_shapes = [{'opt_material' : '1, 1', 'virtual' : (1, None)},
                   {'opt_material' : None}]
-    integration = 'by_region'
+    integration = ('cell', 'facet')
 
     def get_function(self, mat, virtual, mode=None, term_mode=None,
                      diff_var=None, **kwargs):
@@ -1260,7 +1271,7 @@ class EDotTerm(ETermBase):
                   {'opt_material' : 'D, D'},
                   {'opt_material' : None}]
     modes = ('weak', 'eval')
-    integration = 'by_region'
+    integration = ('cell', 'facet')
 
     def get_function(self, mat, virtual, state, mode=None, term_mode=None,
                      diff_var=None, **kwargs):
@@ -1341,7 +1352,7 @@ class ENonPenetrationPenaltyTerm(ETermBase):
     arg_types = ('material', 'virtual', 'state')
     arg_shapes = {'material' : '1, 1',
                   'virtual' : ('D', 'state'), 'state' : 'D'}
-    integration = 'surface'
+    integration = 'facet'
 
     def get_function(self, mat, virtual, state, mode=None, term_mode=None,
                      diff_var=None, **kwargs):
@@ -1486,7 +1497,9 @@ class EGradTerm(ETermBase):
 
     .. math::
         \int_{\Omega} \nabla \ul{v} \mbox { , }
-        \int_{\Omega} c \nabla \ul{v}
+        \int_{\Omega} c \nabla \ul{v} \mbox { , }
+        \int_{\Omega} \ul{c} \cdot \nabla \ul{v} \mbox { , }
+        \int_{\Omega} \ull{c} \cdot \nabla \ul{v}
 
     :Arguments:
         - material: :math:`c` (optional)
@@ -1495,6 +1508,7 @@ class EGradTerm(ETermBase):
     name = 'de_grad'
     arg_types = ('opt_material', 'parameter')
     arg_shapes = [{'opt_material' : '1, 1', 'parameter' : 'N'},
+                  {'opt_material' : 'N, 1'}, {'opt_material' : 'N, N'},
                   {'opt_material' : None}]
 
     def get_function(self, mat, virtual, mode=None, term_mode=None,
@@ -1505,8 +1519,16 @@ class EGradTerm(ETermBase):
             )
 
         else:
+            dim = virtual.dim
+            if mat.shape[-2:] == (1, 1):
+                expr = '00,i.j'
+            elif mat.shape[-2:] in [(dim, 1), (dim, dim)]:
+                expr = 'jk,i.j'
+            else:
+                raise ValueError(f'wrong matrial shape! ({mat.shape[-2:]})')
+
             fun = self.make_function(
-                '00,i.j', mat, virtual, diff_var=diff_var,
+                expr, mat, virtual, diff_var=diff_var,
             )
 
         return fun
@@ -1733,7 +1755,7 @@ class ELinearTractionTerm(ETermBase):
                   {'opt_material': None}, {'opt_material': '1, 1'},
                   {'opt_material': 'D, 1'}, {'opt_material': 'D, D'}]
     modes = ('weak', 'eval')
-    integration = 'surface'
+    integration = 'facet'
 
     def get_function(self, traction, vvar, mode=None, term_mode=None,
                      diff_var=None, **kwargs):
@@ -1766,3 +1788,44 @@ class ELinearTractionTerm(ETermBase):
         )
 
         return fun
+
+class SurfaceFluxOperatorTerm(ETermBase):
+    r"""
+    Surface flux operator term.
+
+    :Definition:
+
+    .. math::
+        \int_{\Gamma} q \ul{n} \cdot \ull{K} \cdot \nabla p \mbox{ , }
+        \int_{\Gamma} p \ul{n} \cdot \ull{K} \cdot \nabla q
+
+    :Arguments 1:
+        - material : :math:`\ull{K}`
+        - virtual  : :math:`q`
+        - state    : :math:`p`
+
+    :Arguments 2:
+        - material : :math:`\ull{K}`
+        - state    : :math:`p`
+        - virtual  : :math:`q`
+    """
+    name = 'de_surface_flux'
+    arg_types = (('material', 'virtual', 'state'),
+                 ('material', 'state', 'virtual'),
+                 ('material', 'parameter_1', 'parameter_2'))
+    arg_shapes = [{'material' : 'D, D',
+                   'virtual/grad_state' : (1, None),
+                   'state/grad_state' : 1,
+                   'virtual/grad_virtual' : (1, None),
+                   'state/grad_virtual' : 1,
+                   'parameter_1': 1, 'parameter_2': 1}]
+    integration = 'facet_extra'
+    modes = ('grad_state', 'grad_virtual', 'eval')
+
+    def get_function(self, mat, var1, var2, mode=None, term_mode=None,
+                     diff_var=None, **kwargs):
+        normals = self.get_normals(var2)
+        return self.make_function(
+            'i,ij,0,0.j',
+            normals, mat, var1, var2, diff_var=diff_var,
+        )

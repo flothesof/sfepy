@@ -2,7 +2,7 @@ from __future__ import absolute_import
 import numpy as nm
 
 from sfepy.base.base import assert_, Struct
-from sfepy.terms.terms import terms
+from sfepy.terms.terms import Term, terms
 from sfepy.terms.terms_hyperelastic_base import\
     HyperElasticBase, HyperElasticFamilyData
 
@@ -684,20 +684,24 @@ class HyperElasticSurfaceTLFamilyData(HyperElasticFamilyData):
     cache_name = 'tl_surface_common'
     data_names = ('mtx_f', 'det_f', 'inv_f')
 
-    def __call__(self, state, region, integral, integration,
+    def __call__(self, state, region, integral, geometry_type,
                  step=0, derivative=None):
         sg, _ = state.field.get_mapping(region,
-                                        integral, integration,
+                                        integral, geometry_type[0],
                                         get_saved=True)
-        sd = state.field.surface_data[region.name]
+        sd = state.field.extra_data[f'sd_{region.name}']
 
         vec = state(step=step, derivative=derivative)
 
-        st_shape = state.get_data_shape(integral, integration, region.name)
+        st_shape = state.get_data_shape(integral, geometry_type[0],
+                                        region.name)
         data = self.init_data_struct(st_shape, name='surface_family_data')
 
         fargs = tuple([getattr(data, k) for k in self.data_names])
         fargs = fargs + (vec, sg, sd.fis, state.field.econn)
+        fargs = Term.translate_fargs_mapping(self.family_function,
+                                             list(fargs))
+
         self.family_function(*fargs)
 
         return data
@@ -729,7 +733,7 @@ class SurfaceFluxTLTerm(HyperElasticSurfaceTLBase):
     arg_shapes = {'material_1' : 'D, D', 'material_2' : '1, 1',
                   'parameter_1' : 1, 'parameter_2' : 'D'}
     family_data_names = ['det_f', 'inv_f']
-    integration = 'surface_extra'
+    integration = 'facet_extra'
 
     function = staticmethod(terms.d_tl_surface_flux)
 
@@ -779,14 +783,14 @@ class SurfaceTractionTLTerm(HyperElasticSurfaceTLBase):
                    'state' : 'D'},
                   {'opt_material' : None}]
     family_data_names = ['det_f', 'inv_f']
-    integration = 'surface_extra'
+    integration = 'facet_extra'
 
     function = staticmethod(terms.dw_tl_surface_traction)
 
     def get_fargs(self, mat, virtual, state,
                   mode=None, term_mode=None, diff_var=None, **kwargs):
         sg, _ = self.get_mapping(virtual)
-        sd = virtual.field.surface_data[self.region.name]
+        sd = virtual.field.extra_data[f'sd_{self.region.name}']
         bf = virtual.field.get_base(sd.bkey, 0, self.integral)
 
         name = state.name
@@ -828,14 +832,14 @@ class VolumeSurfaceTLTerm(HyperElasticSurfaceTLBase):
     arg_types = ('parameter',)
     arg_shapes = {'parameter' : 'D'}
     family_data_names = ['det_f', 'inv_f']
-    integration = 'surface_extra'
+    integration = 'facet_extra'
 
     function = staticmethod(terms.d_tl_volume_surface)
 
     def get_fargs(self, parameter,
                   mode=None, term_mode=None, diff_var=None, **kwargs):
         sg, _ = self.get_mapping(parameter)
-        sd = parameter.field.surface_data[self.region.name]
+        sd = parameter.field.extra_data[f'sd_{self.region.name}']
         bf = parameter.field.get_base(sd.bkey, 0, self.integral)
 
         name = parameter.name

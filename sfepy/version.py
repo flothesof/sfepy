@@ -1,5 +1,5 @@
 # SfePy version
-__version__ = '2022.3'
+__version__ = '2023.3'
 
 # "Minimal" supported versions.
 NUMPY_MIN_VERSION = '1.3'
@@ -21,6 +21,7 @@ PYVISTA_MIN_VERSION='0.23.0'
 OPT_EINSUM_MIN_VERSION='3.0.0'
 JAX_MIN_VERSION='0.2.0'
 DASK_MIN_VERSION='2.0.0'
+PRIMME_MIN_VERSION='3.0.0'
 
 CYTHON_MIN_VERSION = '0.14.1'
 

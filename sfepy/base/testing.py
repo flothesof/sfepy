@@ -45,7 +45,7 @@ def assert_equal(a, b, msg='assertion of equality failed!'):
     import scipy.sparse
 
     assert_base_types = (int, float, str, bytes, complex,
-                         None.__class__, type)
+                         None.__class__, type, nm.number)
     if a is b: return
 
     def assert_dict(a, b):
@@ -141,7 +141,6 @@ def run_declaratice_example(ex_filename, output_dir, ext='.vtk',
                      save_ebc=False, save_ebc_nodes=False,
                      save_regions=False,
                      save_regions_as_groups=False,
-                     save_field_meshes=False,
                      solve_not=False)
     status = IndexedStruct(nls_status=NLSStatus(conditions=[]))
 

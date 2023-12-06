@@ -220,16 +220,16 @@ Following the above definitions, a region can be of different `kind`:
 - ``cell_only``, ``facet_only``, ``face_only``, ``edge_only``,
   ``vertex_only`` - only the specified entities are included, other entities
   are empty sets, so that set-like operators still work, see below.
-- The ``cell`` kind is the most general and should be used with volume
+- The ``cell`` kind is the most general and should be used with cell
   terms. It is also the default if the kind is not specified in region
   definition.
 - The ``facet`` kind (same as ``edge`` in 2D and ``face`` in 3D) is to be used
-  with boundary (surface integral) terms.
+  with boundary (facet integral) terms.
 - The ``vertex`` (same as ``vertex_only``) kind can be used with point-wise
   defined terms (e.g. point loads).
 
 The kinds allow a clear distinction between regions of different purpose
-(volume integration domains, surface domains, etc.) and could be uses to lower
+(cell integration domains, facet domains, etc.) and could be used to lower
 memory usage.
 
 A region definition involves `topological entity selections` combined with
@@ -548,7 +548,8 @@ Available LCBC kinds:
 - ``'integral_mean_value'`` - all DOFs in a region are summed to a single new
   DOF;
 - ``'shifted_periodic'`` - generalized periodic BCs that work with two
-  different variables and can have a non-zero mutual shift.
+  different variables and can have a non-zero mutual shift;
+- ``'match_dofs'`` - tie DOFs of two fields.
 
 Only the ``'shifted_periodic'`` LCBC needs the second region and the DOF
 mapping function, see below.
@@ -863,15 +864,12 @@ description file demonstrating how to use different kinds of functions.
 
 - function for setting values of a parameter variable::
 
-    variable_1 = {
-        'name' : 'p',
-        'kind' : 'parameter field',
-        'field' : 'temperature',
-        'like' : None,
-        'special' : {'setter' : 'get_load_variable'},
+    variables = {
+        'p' : ('parameter field', 'temperature',
+               {'setter' : 'get_load_variable'}),
     }
 
-    def get_load_variable(ts, coors, region=None):
+    def get_load_variable(ts, coors, region=None, variable=None, **kwargs):
         y = coors[:,1]
         val = 5e5 * y
         return val
@@ -899,10 +897,13 @@ Additional options (including solver selection)::
         'allow_empty_regions' : True,
 
         # string, output directory
-        'output_dir'        : 'output/<output_dir>',
+        'output_dir' : 'output/<output_dir>',
 
         # 'vtk' or 'h5', output file (results) format
-        'output_format'     : 'h5',
+        'output_format' : 'vtk',
+
+        # output file format variant compatible with 'output_format'
+        'file_format' : 'vtk-ascii',
 
         # string, nonlinear solver name
         'nls' : 'newton',
@@ -925,7 +926,7 @@ Additional options (including solver selection)::
         'save_restart' : -1,
 
         # string, a function to be called after each time step
-        'step_hook'  : '<step_hook_function>',
+        'step_hook' : '<step_hook_function>',
 
         # string, a function to be called after each time step, used to
         # update the results to be saved
@@ -935,10 +936,10 @@ Additional options (including solver selection)::
         'post_process_hook_final' : '<post_process_hook_final_function>',
 
         # string, a function to generate probe instances
-        'gen_probes'        : '<gen_probes_function>',
+        'gen_probes' : '<gen_probes_function>',
 
         # string, a function to probe data
-        'probe_hook'        : '<probe_hook_function>',
+        'probe_hook' : '<probe_hook_function>',
 
         # string, a function to modify problem definition parameters
         'parametric_hook' : '<parametric_hook_function>',
@@ -958,6 +959,16 @@ Additional options (including solver selection)::
         # fixed DOFs are modified w.r.t. a problem without the boundary
         # conditions.
         'active_only' : False,
+
+        # bool, default: False. If True, all DOF connectivities are used to
+        # pre-allocate the matrix graph. If False, only cell region
+        # connectivities are used.
+        'any_dof_conn' : False,
+
+        # bool, default: False. If True, automatically transform equations to a
+        # form suitable for the given solver. Implemented for
+        # ElastodynamicsBaseTS-based solvers
+        'auto_transform_equations' : True,
     }
 
 * ``post_process_hook`` enables computing derived quantities, like
@@ -1412,8 +1423,8 @@ The following already works:
 - region selection based on topological Bezier mesh, see below
 - Dirichlet boundary conditions using projections for non-constant values
 - evaluation in arbitrary point in the physical domain
-- both scalar and vector volume terms work
-- term integration over the whole domain as well as a volume subdomain
+- both scalar and vector cell terms work
+- term integration over the whole domain as well as a cell subdomain
 - simple linearization (output file generation) based on sampling the results
   with uniform parametric vectors
 - basic domain generation with ``sfepy/scripts/gen_iga_patch.py`` based on
@@ -1423,7 +1434,7 @@ The following is not implemented yet:
 
 - tests
 - theoretical convergence rate verification
-- surface terms
+- facet terms
 - other boundary conditions
 - proper (adaptive) linearization for post-processing
 - support for multiple NURBS patches

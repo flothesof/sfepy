@@ -1,10 +1,8 @@
-from __future__ import print_function
-from __future__ import absolute_import
 import sys
 from copy import copy
 from io import StringIO
+from packaging import version
 import numpy as nm
-from distutils.version import LooseVersion
 
 from sfepy.base.base import (complex_types, dict_from_keys_init,
                              assert_, is_derived_class, ordered_iteritems,
@@ -457,7 +455,7 @@ class MeshioLibIO(MeshIO):
          cell_sets) = self._create_out_data(mesh, out,
                                             format=self.file_format)
 
-        if LooseVersion(meshiolib.__version__) >= LooseVersion('4.0.3') and\
+        if version.parse(meshiolib.__version__) >= version.parse('4.0.3') and\
            ('-ascii' in self.file_format or '-binary' in self.file_format):
             self.file_format, ab_str = self.file_format.split('-')
             kwargs['binary'] = True if 'binary' in ab_str else False
@@ -495,25 +493,25 @@ class MeshioLibIO(MeshIO):
         point_data[ngkey] = ngroups
         point_sets = {str(k): nm.where(ngroups == k)[0]
                       for k in nm.unique(ngroups)}
-        cmesh = mesh.cmesh
-        cell_groups = cmesh.cell_groups
-        cgrps = nm.unique(cell_groups)
+        cell_groups = [mesh.get_cmesh(desc).cell_groups for desc in descs]
+        cgrps = nm.unique(nm.hstack(cell_groups))
         # meshio.__version__ > 3.3.2
         cells = []
         cgroups = []
         cell_data = {k: [] for k in cell_data_keys}
         cell_sets = {str(k): [] for k in cgrps}
         for ii, desc in enumerate(descs):
+            cmesh = mesh.get_cmesh(desc)
             cells.append(meshio_Cells(inv_cell_types[desc][0], conns[ii]))
             cidxs = nm.where(cmesh.cell_types == cmesh.key_to_index[desc])
             cidxs = cidxs[0].astype(nm.uint32)
 
-            cgroups.append(cell_groups[cidxs])
+            cgroups.append(cmesh.cell_groups[cidxs])
             for k in cell_data_keys:
                 cell_data[k].append(out[k].data[cidxs, 0, :, 0])
 
             for k in cgrps:
-                idxs = nm.where(cell_groups[cidxs] == k)[0]
+                idxs = nm.where(cmesh.cell_groups[cidxs] == k)[0]
                 cell_sets[str(k)].append(cidxs[idxs])
 
         if self.file_format in ['vtk', 'vtk-ascii', 'vtk-binary', 'vtu']:
@@ -1969,9 +1967,9 @@ class GmshIO(MeshioLibIO):
         try:
             basename, step_num, extension = filename.split(".")
         except ValueError:
-            raise ValueError("Filename of automatically loaded GMSH data must be:"
-                             + "<base name>.<step number>.msh, {} does to "
-                             + "correspond to that"
+            raise ValueError("Filename of automatically loaded GMSH data must"
+                             " be: <base name>.<step number>.msh, {} has to "
+                             "correspond to that"
                              .format(filename))
         n_digits = len(step_num)
         return basename + ".{:0"+str(n_digits)+"d}." + extension
@@ -1980,9 +1978,9 @@ class GmshIO(MeshioLibIO):
         try:
             basename, step_num, extension = filename.split(".")
         except ValueError:
-            raise ValueError("Filename of automatically loaded GMSH data must be:"
-                              + "<base name>.<step number>.msh, {} does to "
-                              + "correspond to that"
+            raise ValueError("Filename of automatically loaded GMSH data must"
+                             " be: <base name>.<step number>.msh, {} has to "
+                             "correspond to that"
                              .format(filename))
         return basename + ".*[0-9]." + extension
 

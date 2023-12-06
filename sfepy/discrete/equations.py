@@ -1,7 +1,6 @@
 """
 Classes of equations composed of terms.
 """
-from __future__ import absolute_import
 from copy import copy
 
 import numpy as nm
@@ -14,7 +13,6 @@ from sfepy.discrete import Materials, Variables, create_adof_conns
 from sfepy.discrete.common.extmods.cmesh import create_mesh_graph
 from sfepy.terms import Terms, Term
 from sfepy.terms.terms_multilinear import ETermBase
-import six
 
 def parse_definition(equation_def):
     """
@@ -52,20 +50,22 @@ class Equations(Container):
 
     @staticmethod
     def from_conf(conf, variables, regions, materials, integrals,
-                  user=None, eterm_options=None, verbose=True):
+                  user=None, eterm_options=None, allow_derivatives=False,
+                  verbose=True):
 
         objs = OneTypeList(Equation)
 
         conf = copy(conf)
 
         ii = 0
-        for name, desc in six.iteritems(conf):
+        for name, desc in conf.items():
             if verbose:
                 output('equation "%s":' %  name)
                 output(desc)
             eq = Equation.from_desc(name, desc, variables, regions,
                                     materials, integrals, user=user,
-                                    eterm_options=eterm_options)
+                                    eterm_options=eterm_options,
+                                    allow_derivatives=allow_derivatives)
             objs.append(eq)
             ii += 1
 
@@ -352,8 +352,8 @@ class Equations(Container):
         Parameters
         ----------
         any_dof_conn : bool
-            By default, only volume DOF connectivities are used, with
-            the exception of trace surface DOF connectivities. If True,
+            By default, only cell DOF connectivities are used, with
+            the exception of trace facet DOF connectivities. If True,
             any kind of DOF connectivities is allowed.
         rdcs, cdcs : arrays, optional
             Additional row and column DOF connectivities, corresponding
@@ -382,8 +382,8 @@ class Equations(Container):
 
         adcs = self.variables.adof_conns
 
-        # Only volume dof connectivities are used, with the exception of trace
-        # surface dof connectivities.
+        # Only cell dof connectivities are used, with the exception of trace
+        # facet dof connectivities.
         shared = set()
         for key, ii, info in iter_dict_of_lists(self.conn_info,
                                                 return_keys=True):
@@ -393,21 +393,19 @@ class Equations(Container):
 
             is_surface = rvar.is_surface or cvar.is_surface
 
-            dct = info.dc_type.type
-            if not (dct in ('volume', 'scalar', 'custom') or is_surface
-                    or info.is_trace or any_dof_conn):
-                continue
-
             rreg_name = info.get_region_name(can_trace=False)
             creg_name = info.get_region_name()
+            mreg_name = None if creg_name == rreg_name else rreg_name
 
             rname = rvar.get_primary_name()
-            rkey = (rname, rreg_name, dct, False)
-            ckey = (cvar.name, creg_name, dct, info.is_trace)
+            cname = cvar.get_primary_name()
+            rkey = (rname, rreg_name, info.dof_conn_types[rname], None)
+            ckey = (cvar.name, creg_name, info.dof_conn_types[cname],
+                    mreg_name)
 
             dc_key = (rkey, ckey)
 
-            if not dc_key in shared:
+            if dc_key not in shared:
                 rdc = adcs[rkey]
                 cdc = adcs[ckey]
                 if not active_only:
@@ -436,9 +434,9 @@ class Equations(Container):
         Parameters
         ----------
         any_dof_conn : bool
-            By default, only volume DOF connectivities are used, with
-            the exception of trace surface DOF connectivities. If True,
-            any kind of DOF connectivities is allowed.
+            By default, only cell region DOF connectivities are used, with
+            the exception of trace facet DOF connectivities. If True,
+            any DOF connectivities are used.
         rdcs, cdcs : arrays, optional
             Additional row and column DOF connectivities, corresponding
             to the variables used in the equations.
@@ -571,16 +569,26 @@ class Equations(Container):
         return self.variables.get_lcbc_operator()
 
     def evaluate(self, names=None, mode='eval', dw_mode='vector',
-                 term_mode=None, asm_obj=None):
+                 term_mode=None, diff_vars=None, asm_obj=None):
         """
         Evaluate the equations.
 
         Parameters
         ----------
-        mode : one of 'eval', 'el_avg', 'qp', 'weak'
-            The evaluation mode.
         names : str or sequence of str, optional
             Evaluate only equations of the given name(s).
+        mode : one of 'eval', 'el_avg', 'qp', 'weak'
+            The evaluation mode.
+        dw_mode : one of 'vector', 'matrix', 'sensitivity'
+            The particular evaluation mode if `mode` is ``'weak'``.
+        term_mode : str
+            The term evaluation mode, used mostly if `mode` is ``'eval'`` in
+            some terms.
+        diff_vars : list of str
+            The names of parameters with respect to the equations are
+            differentiated if `dw_mode` is ``'sensitivity'``.
+        asm_obj : ndarray or spmatrix
+            The object for storing the evaluation result in the ``'weak'`` mode.
 
         Returns
         -------
@@ -604,7 +612,8 @@ class Equations(Container):
             extras = []
             for eq in eqs:
                 out = eq.evaluate(mode=mode, dw_mode=dw_mode,
-                                  term_mode=term_mode, asm_obj=asm_obj)
+                                  term_mode=term_mode, diff_vars=diff_vars,
+                                  asm_obj=asm_obj)
                 if isinstance(out, tuple): extras.extend(out[1])
 
             out = asm_obj
@@ -737,11 +746,11 @@ class Equation(Struct):
 
     @staticmethod
     def from_desc(name, desc, variables, regions, materials, integrals,
-                  user=None, eterm_options=None):
+                  user=None, eterm_options=None, allow_derivatives=False):
         term_descs = parse_definition(desc)
         terms = Terms.from_desc(term_descs, regions, integrals)
 
-        terms.setup()
+        terms.setup(allow_derivatives=allow_derivatives)
         terms.assign_args(variables, materials, user)
 
         if eterm_options is not None:
@@ -750,11 +759,11 @@ class Equation(Struct):
                     term.set_verbosity(eterm_options.get('verbosity', 0))
                     term.set_backend(**eterm_options.get('backend_args', {}))
 
-        obj = Equation(name, terms)
+        obj = Equation(name, terms, setup=False)
 
         return obj
 
-    def __init__(self, name, terms):
+    def __init__(self, name, terms, setup=True):
         Struct.__init__(self, name=name)
 
         if isinstance(terms, Term): # A single term.
@@ -762,7 +771,8 @@ class Equation(Struct):
 
         self.terms = terms
 
-        self.terms.setup()
+        if setup:
+            self.terms.setup()
 
     def collect_materials(self):
         """
@@ -803,12 +813,30 @@ class Equation(Struct):
             conn_info[key] = term.get_conn_info()
 
     def evaluate(self, mode='eval', dw_mode='vector', term_mode=None,
-                 asm_obj=None):
+                 diff_vars=None, asm_obj=None):
         """
+        Evaluate the equation.
+
         Parameters
         ----------
         mode : one of 'eval', 'el_eval', 'el_avg', 'qp', 'weak'
             The evaluation mode.
+        dw_mode : one of 'vector', 'matrix', 'sensitivity'
+            The particular evaluation mode if `mode` is ``'weak'``.
+        term_mode : str
+            The term evaluation mode, used mostly if `mode` is ``'eval'`` in
+            some terms.
+        diff_vars : list of str
+            The names of parameters with respect to the equation is
+            differentiated if `dw_mode` is ``'sensitivity'``.
+        asm_obj : ndarray or spmatrix
+            The object for storing the evaluation result in the ``'weak'`` mode.
+
+        Returns
+        -------
+        out : result
+            The evaluation result. In 'weak' mode it is the
+            `asm_obj`.
         """
         if mode in ('eval', 'el_eval', 'el_avg', 'qp'):
             val = 0.0
@@ -851,6 +879,24 @@ class Equation(Struct):
                         if extra is not None: extras.append(extra)
 
                 out = (asm_obj, extras) if len(extras) else asm_obj
+
+            elif dw_mode == 'sensitivity':
+                # Differentiation w.r.t. material parameters.
+                if diff_vars is None: diff_vars = ()
+
+                for ic, diff_var in enumerate(diff_vars):
+                    for term in self.terms:
+                        if not (term.diff_info and
+                                (diff_var in term.get_material_names(part=1))):
+                            continue
+                        val, iels, status = term.evaluate(mode=mode,
+                                                          term_mode=term_mode,
+                                                          diff_var=diff_var,
+                                                          standalone=False,
+                                                          ret_status=True)
+                        term.assemble_to(asm_obj[:, ic], val, iels)
+
+                out = asm_obj
 
             else:
                 raise ValueError('unknown assembling mode! (%s)' % dw_mode)

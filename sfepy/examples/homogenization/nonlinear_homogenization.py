@@ -74,14 +74,14 @@ def def_mat(ts, mode, coors, term, pb):
     state_u.set_data(
         pb.domain.get_mesh_coors(actual=True) - pb.domain.get_mesh_coors())
     state_u.field.clear_mappings()
-    family_data = pb.family_data(state_u, term.region,
-                                 term.integral, term.integration)
+    family_data = pb.family_data(state_u, term.region, term.integral,
+                                 list(term.geometry_types.values())[0])
 
     if len(state_u.field.mappings0) == 0:
         state_u.field.save_mappings()
 
     n_el, n_qp, dim, n_en, n_c = state_u.get_data_shape(term.integral,
-                                                        term.integration,
+                                                        term.act_integration,
                                                         term.region.name)
 
     conf_mat = pb.conf.materials
@@ -224,7 +224,7 @@ requirements = {
 }
 
 solvers = {
-    'ls': ('ls.scipy_direct', {}),
+    'ls': ('ls.auto_direct', {'use_presolve' : True}),
     'newton': ('nls.newton', {
         'i_max': 1,
         'eps_a': 1e-4,

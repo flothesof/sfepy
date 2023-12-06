@@ -234,8 +234,8 @@ class LOBPCGEigenvalueSolver(EigenvalueSolver):
         else:
             n_eigs = min(n_eigs, mtx_a.shape[0])
 
-        x = nm.zeros((mtx_a.shape[0], n_eigs), dtype=nm.float64)
-        x[:n_eigs] = nm.eye(n_eigs, dtype=nm.float64)
+        rng = nm.random.default_rng(12345)
+        x = rng.normal(size=(mtx_a.shape[0], n_eigs))
 
         out = self.lobpcg(mtx_a, x, mtx_b,
                           M=conf.precond,
@@ -441,5 +441,53 @@ class MatlabEigenvalueSolver(EigenvalueSolver):
         out = evp['vals'][:, 0]
         if eigenvectors:
             out =  (out, evp['vecs'])
+
+        return out
+
+
+class PrimmeEigenvalueSolver(EigenvalueSolver):
+    """
+    PRIMME eigenvalue problem solver.
+
+    https://github.com/primme/primme
+
+    Installation: pip install primme
+    """
+    name = 'eig.primme'
+
+    _parameters = [
+        ('which',
+         "{'LM', 'SM', 'LA', 'SA', 'CLT', 'CGT'}", 'LM', False,
+         'Which eigenvectors and eigenvalues to find.'),
+        ('sigma', 'float', None, False,
+         'Find eigenvalues near sigma.'),
+        ('maxiter', 'int', None, False, 'Maximum number of iterations.'),
+        ('tol', 'float', 0, False,
+         'Tolerance for eigenpairs (stopping criterion).'),
+        ('*', '*', None, False,
+         'Additional parameters supported by eigsh().'),
+    ]
+
+    def __init__(self, conf, comm=None, context=None, **kwargs):
+        import primme
+
+        EigenvalueSolver.__init__(self, conf, primme=primme, context=context,
+                                  **kwargs)
+
+    @standard_call
+    def __call__(self, mtx_a, mtx_b=None, n_eigs=None, eigenvectors=None,
+                 status=None, conf=None, comm=None, context=None):
+        if n_eigs is None:
+            n_eigs = mtx_a.shape[0]
+
+        solver_kwargs = self.build_solver_kwargs(conf)
+
+        out = self.primme.eigsh(mtx_a, n_eigs, M=mtx_b,
+                                which=conf.which.upper(),
+                                tol=conf.tol,
+                                maxiter=conf.maxiter,
+                                sigma=conf.sigma,
+                                return_eigenvectors=eigenvectors,
+                                **solver_kwargs)
 
         return out

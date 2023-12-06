@@ -11,7 +11,7 @@ class ContactInfo(Struct):
     """
     def __init__(self, region, integral, geo, state):
         # Uses field connectivity (higher order nodes).
-        sd = state.field.surface_data[region.name]
+        sd = state.field.extra_data[f'sd_{region.name}']
 
         ISN = state.field.efaces.T.copy()
         nsd = region.dim
@@ -96,7 +96,7 @@ class ContactTerm(Term):
     arg_types = ('material', 'virtual', 'state')
     arg_shapes = {'material' : '.: 1',
                   'virtual' : ('D', 'state'), 'state' : 'D'}
-    integration = 'surface'
+    integration = 'facet'
 
     def __init__(self, *args, **kwargs):
         Term.__init__(self, *args, **kwargs)

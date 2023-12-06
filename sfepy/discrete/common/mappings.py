@@ -4,6 +4,41 @@ Reference-physical domain mappings.
 import numpy as nm
 
 from sfepy.base.base import Struct
+from sfepy.discrete.common.extmods.cmapping import CMapping
+
+
+class PyCMapping(Struct):
+    """
+    Class for storing mapping data. Primary data in numpy arrays.
+    Data for C functions translated to FMFields and embedded in CMapping.
+    """
+    def __init__(self, bf, det, volume, bfg, normal, dim):
+        self.bf = bf
+        self.det = det
+        self.volume = volume
+        self.bfg = bfg
+        self.normal = normal
+
+        self.cmap = CMapping(bf, det, volume, bfg, normal, dim)
+
+        n_el, n_qp = det.shape[:2]
+        n_ep = bf.shape[3]
+        self.n_el = n_el
+        self.n_qp = n_qp
+        self.dim = dim
+        self.n_ep = n_ep
+
+    def integrate(self, out, field, mode=0):
+        dim = field.shape[2]
+        if mode < 3 or dim == 1:
+            out[:] = nm.sum(field * self.det, axis=1)[:, None, :, :]
+            if mode == 1:
+                out /= self.volume
+        elif dim == (self.tdim + 1) and self.normal is not None:
+            out[:] = nm.dot(field, self.normal) * self.det / self.volume
+
+        return 0
+
 
 class PhysicalQPs(Struct):
     """
@@ -59,36 +94,35 @@ class Mapping(Struct):
 
         Returns
         -------
-        mapping : VolumeMapping or SurfaceMapping instance
+        mapping : FEMapping or IGMapping instance
             The requested mapping.
         """
         from sfepy.discrete.fem.domain import FEDomain
         from sfepy.discrete.iga.domain import IGDomain
 
         if isinstance(region.domain, FEDomain):
-            import sfepy.discrete.fem.mappings as mm
+            from sfepy.discrete.fem.mappings import FEMapping
             coors = region.domain.get_mesh_coors()
             if kind == 's':
                 coors = coors[region.vertices]
 
-            conn, gel = region.domain.get_conn(ret_gel=True)
-
             if kind == 'v':
                 cells = region.get_cells()
 
-                mapping = mm.VolumeMapping(coors, conn[cells], gel=gel)
+                conn, gel = region.domain.get_conn(ret_gel=True,
+                                                   tdim=region.tdim,
+                                                   cells=region.cells)
+
+                mapping = FEMapping(coors, conn, gel=gel)
 
             elif kind == 's':
                 from sfepy.discrete.fem.fe_surface import FESurface
-
-                aux = FESurface('aux', region, gel.get_surface_entities(),
-                                conn)
-                mapping = mm.SurfaceMapping(coors, aux.leconn,
-                                            gel=gel.surface_facet)
+                aux, gel = FESurface.from_region('aux', region, ret_gel=True)
+                mapping = FEMapping(coors, aux.leconn, gel=gel)
 
         elif isinstance(region.domain, IGDomain):
-            import sfepy.discrete.iga.mappings as mm
-            mapping = mm.IGMapping(region.domain, region.cells)
+            from sfepy.discrete.iga.mappings import IGMapping
+            mapping = IGMapping(region.domain, region.cells)
 
         else:
             raise ValueError('unknown domain class! (%s)' % type(region.domain))

@@ -1,6 +1,7 @@
 # -*- coding: utf-8
 r"""
 Homogenization of the Darcy flow in a thin porous layer.
+
 The reference cell is composed of the matrix representing the dual porosity
 and of two disconnected channels representing the primary porosity,
 see paper [1].
@@ -437,6 +438,7 @@ requirements = {
         'epbcs': [],
         'save_name': 'corrs_one_YM',
         'class': cb.CorrSetBCS,
+        'is_linear': True,
     },
 }
 
@@ -453,6 +455,7 @@ for ipm in ['p', 'm']:
                 },
             'class': cb.CorrOne,
             'save_name': 'corrs_%s_gamma_%s' % (pb_def['name'], ipm),
+            'is_linear': True,
         },
     })
 
@@ -552,6 +555,7 @@ for ch, val in six.iteritems(pb_def['channels']):
                 },
             'class': cb.CorrOne,
             'save_name': 'corrs_%s_eta%s' % (pb_def['name'], ch),
+            'is_linear': True,
         },
         'corrs_pi' + ch: {
             'requires': ['pis_' + ch],
@@ -659,7 +663,7 @@ for ch, val in six.iteritems(pb_def['channels']):
             })
 
 solvers = {
-    'ls': ('ls.scipy_direct', {}),
+    'ls': ('ls.auto_direct', {'use_presolve' : True}),
     'newton': ('nls.newton', {
         'i_max': 1,
     })

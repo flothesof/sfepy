@@ -141,7 +141,7 @@ class BiotStressTerm(CauchyStressTerm):
     name = 'ev_biot_stress'
     arg_types = ('material', 'parameter')
     arg_shapes = {'material' : 'S, 1', 'parameter' : 1}
-    integration = 'volume'
+    integration = 'cell'
 
     @staticmethod
     def function(out, val_qp, mat, vg, fmode):
@@ -150,7 +150,8 @@ class BiotStressTerm(CauchyStressTerm):
             status = 0
 
         else:
-            status = terms.de_cauchy_stress(out, val_qp, mat, vg, fmode)
+
+            status = terms.de_cauchy_stress(out, val_qp, mat, vg.cmap, fmode)
 
         out *= -1.0
 

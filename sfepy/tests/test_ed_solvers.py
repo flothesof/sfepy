@@ -1,3 +1,5 @@
+from functools import partial
+
 import numpy as nm
 import pytest
 
@@ -7,7 +9,8 @@ import sfepy.mechanics.matcoefs as mc
 import sfepy.base.testing as tst
 
 def define(t1=15e-6, dt=1e-6, dims=(0.1, 0.02, 0.005), shape=(11, 3, 3),
-           young=70e9, poisson=0.3, density=2700):
+           young=70e9, poisson=0.3, density=2700, mass_lumping='row_sum',
+           mass_beta=0.2):
 
     def mesh_hook(mesh, mode):
         """
@@ -40,6 +43,8 @@ def define(t1=15e-6, dt=1e-6, dims=(0.1, 0.02, 0.005), shape=(11, 3, 3),
                 dim=dim, young=young, poisson=poisson, plane='strain'
             ),
             'rho': density,
+            '.lumping' : mass_lumping,
+            '.beta' : mass_beta,
          },),
     }
 
@@ -59,6 +64,7 @@ def define(t1=15e-6, dt=1e-6, dims=(0.1, 0.02, 0.005), shape=(11, 3, 3),
         'dv' : ('test field', 'displacement', 'du'),
         'ddv' : ('test field', 'displacement', 'ddu'),
     }
+    var_names = {'u' : 'u', 'du' : 'du', 'ddu' : 'ddu'}
 
     ebcs = {
         'fix' : ('Left', {'u.all' : 0.0, 'du.all' : 0.0, 'ddu.all' : 0.0}),
@@ -71,7 +77,7 @@ def define(t1=15e-6, dt=1e-6, dims=(0.1, 0.02, 0.005), shape=(11, 3, 3),
 
         elif mode == 'du':
             xmax = coors[:, 0].max()
-            val[:, 2] = nm.where((coors[:, 0] > (xmax - 1e-12)), 1.0, 0.0)
+            val[:, -1] = nm.where((coors[:, 0] > (xmax - 1e-12)), 1.0, 0.0)
 
         return val
 
@@ -96,10 +102,16 @@ def define(t1=15e-6, dt=1e-6, dims=(0.1, 0.02, 0.005), shape=(11, 3, 3),
         'ls' : ('ls.auto_direct', {
             # Reuse the factorized linear system from the first time step.
             'use_presolve' : True,
-            # Speed up the above by omitting the matrix digest check used normally
-            # for verification that the current matrix corresponds to the
-            # factorized matrix stored in the solver instance. Use with care!
+            # Speed up the above by omitting the matrix digest check used
+            # normally for verification that the current matrix corresponds to
+            # the factorized matrix stored in the solver instance. Use with
+            # care!
             'use_mtx_digest' : False,
+        }),
+        'lsrmm' : ('ls.rmm', {
+            'rmm_term' : """de_mass.i.Omega(solid.rho, solid.lumping,
+                                            solid.beta, ddv, ddu)""",
+            'debug' : False,
         }),
         'newton' : ('nls.newton', {
             'i_max'      : 1,
@@ -107,8 +119,7 @@ def define(t1=15e-6, dt=1e-6, dims=(0.1, 0.02, 0.005), shape=(11, 3, 3),
             'eps_r'      : 1e-6,
         }),
         'tsvv' : ('ts.velocity_verlet', {
-            # Excplicit method -> requires at least 10x smaller dt than the other
-            # time-stepping solvers.
+            # Explicit method.
             't0' : 0.0,
             't1' : t1,
             'dt' : 0.1 * dt,
@@ -116,6 +127,19 @@ def define(t1=15e-6, dt=1e-6, dims=(0.1, 0.02, 0.005), shape=(11, 3, 3),
 
             'is_linear'  : True,
 
+            'var_names' : var_names,
+            'verbose' : 1,
+        }),
+        'tscd' : ('ts.central_difference', {
+            # Explicit method.
+            't0' : 0.0,
+            't1' : t1,
+            'dt' : 0.1 * dt,
+            'n_step' : None,
+
+            'is_linear'  : True,
+
+            'var_names' : var_names,
             'verbose' : 1,
         }),
         'tsn' : ('ts.newmark', {
@@ -129,6 +153,7 @@ def define(t1=15e-6, dt=1e-6, dims=(0.1, 0.02, 0.005), shape=(11, 3, 3),
             'beta' : 0.25,
             'gamma' : 0.5,
 
+            'var_names' : var_names,
             'verbose' : 1,
         }),
         'tsga' : ('ts.generalized_alpha', {
@@ -145,6 +170,7 @@ def define(t1=15e-6, dt=1e-6, dims=(0.1, 0.02, 0.005), shape=(11, 3, 3),
             'beta' : None,
             'gamma' : None,
 
+            'var_names' : var_names,
             'verbose' : 1,
         }),
         'tsb' : ('ts.bathe', {
@@ -155,6 +181,7 @@ def define(t1=15e-6, dt=1e-6, dims=(0.1, 0.02, 0.005), shape=(11, 3, 3),
 
             'is_linear'  : True,
 
+            'var_names' : var_names,
             'verbose' : 1,
         }),
         'tscedb' : ('tsc.ed_basic', {
@@ -243,8 +270,7 @@ def test_ed_solvers(problem, output_dir):
     sensor = problem.domain.regions['Sensor']
     isens = 3 * vu.field.get_dofs_in_region(sensor)[0] + 2
 
-    ths = []
-    def store_ths(pb, ts, variables):
+    def store_ths(pb, ts, variables, ths):
         sp = variables.get_state_parts()
         u1, v1, a1 = sp['u'], sp['du'], sp['ddu']
 
@@ -262,8 +288,9 @@ def test_ed_solvers(problem, output_dir):
             status = IndexedStruct()
             problem.init_solvers(tsc_conf=tsc_conf, ts_conf=tss_conf,
                                  status=status, force=True)
-            ths[:] = []
-            problem.solve(status=status, save_results=False, step_hook=store_ths)
+            ths = []
+            problem.solve(status=status, save_results=False,
+                          step_hook=partial(store_ths, ths=ths))
             all_ths.append(nm.array(ths))
             stats.append((problem.solver.tsc.conf.kind, tss_conf.kind,
                           status.n_step, status.time))
@@ -295,18 +322,22 @@ def test_ed_solvers(problem, output_dir):
         ('tsc.fixed', 'ts.bathe') : 1e-1,
         ('tsc.fixed', 'ts.generalized_alpha') : 1e-2,
         ('tsc.fixed', 'ts.newmark') : 1e-12,
+        ('tsc.fixed', 'ts.central_difference') : 1e-2,
         ('tsc.fixed', 'ts.velocity_verlet') : 1e-2,
         ('tsc.ed_basic', 'ts.bathe') : 1e-1,
         ('tsc.ed_basic', 'ts.generalized_alpha') : 1e-3,
         ('tsc.ed_basic', 'ts.newmark') : 1e-12,
+        ('tsc.ed_basic', 'ts.central_difference') : 2e-2,
         ('tsc.ed_basic', 'ts.velocity_verlet') : 2e-2,
         ('tsc.ed_linear', 'ts.bathe') : 1e-1,
         ('tsc.ed_linear', 'ts.generalized_alpha') : 1e-3,
         ('tsc.ed_linear', 'ts.newmark') : 1e-12,
+        ('tsc.ed_linear', 'ts.central_difference') : 2e-2,
         ('tsc.ed_linear', 'ts.velocity_verlet') : 2e-2,
         ('tsc.ed_pid', 'ts.bathe') : 1e-2,
         ('tsc.ed_pid', 'ts.generalized_alpha') : 1e-4,
         ('tsc.ed_pid', 'ts.newmark') : 1e-12,
+        ('tsc.ed_pid', 'ts.central_difference') : 1e-2,
         ('tsc.ed_pid', 'ts.velocity_verlet') : 1e-2,
     }
     ok = True
@@ -320,3 +351,90 @@ def test_ed_solvers(problem, output_dir):
 
     assert ok
     assert nm.isclose(e0, 1.8e-4, atol=0, rtol=1e-12)
+
+def test_rmm_solver(problem, output_dir):
+    from sfepy.base.base import IndexedStruct
+
+    ls_conf = problem.solver_confs['ls']
+    lsr_conf = problem.solver_confs['lsrmm']
+    tss_conf = problem.solver_confs['tscd']
+
+    vu = problem.get_variables()['u']
+    sensor = problem.domain.regions['Sensor']
+    isens = 3 * vu.field.get_dofs_in_region(sensor)[0] + 2
+
+    def store_ths(pb, ts, variables, ths):
+        sp = variables.get_state_parts()
+        u1, v1 = sp['u'], sp['du']
+
+        e_u = 0.5 * u1 @ pb.Kf @ u1
+        e_t = 0.5 * v1 @ pb.Mf @ v1
+        ths.append((ts.time, u1[isens], v1[isens], e_u, e_t))
+
+    problem.tsc_conf = None
+
+    status = IndexedStruct()
+    problem.init_solvers(ls_conf=ls_conf, ts_conf=tss_conf, status=status,
+                         force=True)
+    ths = []
+    problem.solve(status=status, save_results=False,
+                  step_hook=partial(store_ths, ths=ths))
+    ths = nm.array(ths)
+
+    statusr = IndexedStruct()
+    problem.init_solvers(ls_conf=lsr_conf, ts_conf=tss_conf, status=statusr,
+                         force=True)
+    thsr = []
+    problem.solve(status=statusr, save_results=False,
+                  step_hook=partial(store_ths, ths=thsr))
+    thsr = nm.array(thsr)
+
+    tst.report(f'solution times: CMM: {status.time}, RMM: {statusr.time}')
+
+    ratio = abs(ths[:,2].max() / ths[:,1].max())
+
+    # import matplotlib.pyplot as plt
+    # colors = plt.cm.tab10.colors
+    # fig, ax = plt.subplots()
+    # ax.plot(ths[:,0], ths[:,3], color=colors[0], ls='-')
+    # ax.plot(ths[:,0], ths[:,4], color=colors[1], ls='-')
+    # ax.plot(thsr[:,0], thsr[:,3], color=colors[0], ls='--')
+    # ax.plot(thsr[:,0], thsr[:,4], color=colors[1], ls='--')
+    # fig, ax = plt.subplots()
+    # ax.plot(ths[:,0], ratio * ths[:,1], color=colors[0], ls='-')
+    # ax.plot(ths[:,0], ths[:,2], color=colors[1], ls='-')
+    # ax.plot(thsr[:,0], ratio * thsr[:,1], color=colors[0], ls='--')
+    # ax.plot(thsr[:,0], thsr[:,2], color=colors[1], ls='--')
+    # plt.show()
+
+    dt = ths[1, 0] - ths[0, 0]
+    ierrs = nm.linalg.norm(ths[:, 1:] - thsr[:, 1:], axis=0) * dt
+
+    assert ierrs[0] < 1e-13
+    assert ierrs[1] < 3 * ratio * 1e-13
+    assert ierrs[2] < 1e-11
+    assert ierrs[3] < 1e-11
+
+def test_active_only(output_dir):
+    """
+    Note: with tsc the results would differ, as eval_scaled_norm() depends on
+    the vector length.
+    """
+    import sys
+    from sfepy.discrete import Problem
+    from sfepy.base.conf import ProblemConf
+
+    define_dict = define(dims=(0.1, 0.02), shape=(3, 3))
+    conf = ProblemConf.from_dict(define_dict, sys.modules[__name__])
+
+    conf.options.active_only = False
+    pb = Problem.from_conf(conf)
+    pb.tsc_conf = None
+    variables_f = pb.solve()
+
+    conf.options.active_only = True
+    pb = Problem.from_conf(conf)
+    pb.tsc_conf = None
+    variables_t = pb.solve()
+
+    assert nm.allclose(variables_f(), variables_t(), atol=1e-7, rtol=0)

@@ -27,7 +27,10 @@ definition. Then the solver can automatically extract the mass, damping (zero
 here), and stiffness matrices as diagonal blocks of the global matrix. Note
 also the use of the ``'dw_zero'`` (do-nothing) term that prevents the
 velocity-related variables to be removed from the equations in the absence of a
-damping term.
+damping term. This manual declaration of variables and ``'dw_zero'`` can be
+avoided by setting the ``'auto_transform_equations'`` option to True, see
+:ref:`linear_elasticity-seismic_load` or
+:ref:`multi_physics-piezo_elastodynamic`.
 
 Usage Examples
 --------------
@@ -39,7 +42,7 @@ in ``output/ed/``)::
 
 Solve using the Bathe method::
 
-  sfepy-run sfepy/examples/linear_elasticity/elastodynamic.py -O "ts='tsb'"
+  sfepy-run sfepy/examples/linear_elasticity/elastodynamic.py -O "tss_name='tsb'"
 
 View the resulting displacements on the deforming mesh (1000x magnified),
 Cauchy strain and stress using::
@@ -49,7 +52,7 @@ Cauchy strain and stress using::
 Solve in 2D using the explicit Velocity-Verlet method with adaptive
 time-stepping and save all time steps (see ``plot_times.py`` use below)::
 
-  sfepy-run sfepy/examples/linear_elasticity/elastodynamic.py -d "dims=(5e-3, 5e-3), shape=(61, 61), tss_name='tsvv', adaptive=True, save_times='all'"
+  sfepy-run sfepy/examples/linear_elasticity/elastodynamic.py -d "dims=(5e-3, 5e-3), shape=(61, 61), tss_name='tsvv', tsc_name='tscedb', adaptive=True, save_times='all'"
 
 View the resulting velocities on the deforming mesh (1000x magnified) using::
 
@@ -70,9 +73,19 @@ reducing so the need for a new matrix factorization. Run::
 
 The resulting velocities and adaptive time steps can again be plotted by the
 commands shown above.
-"""
-from __future__ import absolute_import
 
+Use the central difference explicit method with the reciprocal mass matrix
+algorithm [1]_ and view the resulting stress waves::
+
+  sfepy-run sfepy/examples/linear_elasticity/elastodynamic.py -d "dims=(5e-3, 5e-3), shape=(61, 61), tss_name=tscd, tsc_name=tscedl, adaptive=False, ls_name=lsrmm, mass_beta=0.5, mass_lumping=row_sum, fast_rmm=True, save_times=all"
+
+  sfepy-view output/ed/user_block.h5 -2 --grid-vector1=1.2,0,0 -f cauchy_stress:wu:f1e3:p0 1:vw:p0
+
+.. [1] González, J.A., Kolman, R., Cho, S.S., Felippa, C.A., Park, K.C., 2018.
+       Inverse mass matrix via the method of localized Lagrange multipliers.
+       International Journal for Numerical Methods in Engineering 113, 277–295.
+       https://doi.org/10.1002/nme.5613
+"""
 import numpy as nm
 
 import sfepy.mechanics.matcoefs as mc
@@ -86,11 +99,18 @@ def define(
         shape=(21, 6, 6),
         v0=1.0,
         ct1=1.5,
+        dt=None,
+        edt_safety=0.2,
         tss_name='tsn',
-        tsc_name='tscedb',
+        tsc_name='tscedl',
         adaptive=False,
         ls_name='lsd',
+        mass_beta=0.0,
+        mass_lumping='none',
+        fast_rmm=False,
+        active_only=False,
         save_times=20,
+        output_dir='output/ed',
 ):
     """
     Parameters
@@ -101,10 +121,18 @@ def define(
     shape: numbers of mesh vertices along each axis
     v0: initial impact velocity
     ct1: final time in L / "longitudinal wave speed" units
+    dt: time step (None means automatic)
+    edt_safety: safety factor time step multiplier for explicit schemes,
+                if dt is None
     tss_name: time stepping solver name (see "solvers" section)
+    tsc_name: time step controller name (see "solvers" section)
     adaptive: use adaptive time step control
     ls_name: linear system solver name (see "solvers" section)
+    mass_beta: averaged mass matrix parameter 0 <= beta <= 1
+    mass_lumping: mass matrix lumping ('row_sum', 'hrz' or 'none')
+    fast_rmm: use zero inertia term with lsrmm
     save_times: number of solutions to save
+    output_dir: output directory
     """
     dim = len(dims)
 
@@ -115,11 +143,16 @@ def define(
 
     # Element size.
     L, d = dims[:2]
-    H = L / (shape[0] - 1)
+    H = L / (nm.max(shape) - 1)
 
     # Time-stepping parameters.
-    # Note: the Courant number C0 =  dt * cl / H
-    dt = H / cl # C0 = 1
+    if dt is None:
+        # For implicit schemes, dt based on the Courant number C0 = dt * cl / H
+        # equal to 1.
+        dt = H / cl # C0 = 1
+        if tss_name in ('tsvv', 'tscd'):
+            # For explicit schemes, use a safety margin.
+            dt *= edt_safety
 
     t1 = ct1 * L / cl
 
@@ -168,10 +201,12 @@ def define(
     # Iron.
     materials = {
         'solid' : ({
-                'D': mc.stiffness_from_youngpoisson(dim=dim, young=E, poisson=nu,
-                                                    plane=plane),
-                'rho': rho,
-         },),
+            'D': mc.stiffness_from_youngpoisson(dim=dim, young=E, poisson=nu,
+                                                plane=plane),
+            'rho': rho,
+            '.lumping' : mass_lumping,
+            '.beta' : mass_beta,
+        },),
     }
 
     fields = {
@@ -182,6 +217,13 @@ def define(
         'i' : 2,
     }
 
+    # Notes:
+    # 1. The order of the variables in the solution vector is specified here
+    #    (3rd tuple member), since that specific order is expected by the
+    #    elastodynamic time-stepping solvers.
+    # 2. For the same reason, we won't explicitly define below the equations
+    #    du = du/dt and ddu = ddu/dt - these are implicitly defined by
+    #    the time-stepping solver. see the `step()` method of the solvers.
     variables = {
         'u' : ('unknown field', 'displacement', 0),
         'du' : ('unknown field', 'displacement', 1),
@@ -190,6 +232,9 @@ def define(
         'dv' : ('test field', 'displacement', 'du'),
         'ddv' : ('test field', 'displacement', 'ddu'),
     }
+    # The mapping of variables for the elastodynamics solvers - keys are given,
+    # values correspond to the names of the actual variables.
+    var_names = {'u' : 'u', 'du' : 'du', 'ddu' : 'ddu'}
 
     ebcs = {
         'Impact' : ('Impact', {'u.0' : 0.0, 'du.0' : 0.0, 'ddu.0' : 0.0}),
@@ -221,9 +266,16 @@ def define(
         'ic' : ('Omega', {'u.all' : 'get_ic_u', 'du.all' : 'get_ic_du'}),
     }
 
+    if (ls_name == 'lsrmm') and fast_rmm:
+        # Speed up residual calculation, as M is not used with lsrmm.
+        term = 'dw_zero.i.Omega(ddv, ddu)'
+
+    else:
+        term = 'de_mass.i.Omega(solid.rho, solid.lumping, solid.beta, ddv, ddu)'
+
     equations = {
         'balance_of_forces' :
-        """dw_dot.i.Omega(solid.rho, ddv, ddu)
+        term + """
          + dw_zero.i.Omega(dv, du)
          + dw_lin_elastic.i.Omega(solid.D, v, u) = 0""",
     }
@@ -232,9 +284,10 @@ def define(
         'lsd' : ('ls.auto_direct', {
             # Reuse the factorized linear system from the first time step.
             'use_presolve' : True,
-            # Speed up the above by omitting the matrix digest check used normally
-            # for verification that the current matrix corresponds to the
-            # factorized matrix stored in the solver instance. Use with care!
+            # Speed up the above by omitting the matrix digest check used
+            # normally for verification that the current matrix corresponds to
+            # the factorized matrix stored in the solver instance. Use with
+            # care!
             'use_mtx_digest' : False,
         }),
         'lsi' : ('ls.petsc', {
@@ -245,14 +298,18 @@ def define(
             'eps_r' : 1e-8,
             'verbose' : 2,
         }),
+        'lsrmm' : ('ls.rmm', {
+            'rmm_term' : """de_mass.i.Omega(solid.rho, solid.lumping,
+                                            solid.beta, ddv, ddu)""",
+            'debug' : False,
+        }),
         'newton' : ('nls.newton', {
             'i_max'      : 1,
             'eps_a'      : 1e-6,
             'eps_r'      : 1e-6,
         }),
         'tsvv' : ('ts.velocity_verlet', {
-            # Excplicit method -> requires at least 10x smaller dt than the other
-            # time-stepping solvers, or an adaptive time step control.
+            # Explicit method.
             't0' : 0.0,
             't1' : t1,
             'dt' : dt,
@@ -260,6 +317,19 @@ def define(
 
             'is_linear'  : True,
 
+            'var_names' : var_names,
+            'verbose' : 1,
+        }),
+        'tscd' : ('ts.central_difference', {
+            # Explicit method. Supports ls.rmm.
+            't0' : 0.0,
+            't1' : t1,
+            'dt' : dt,
+            'n_step' : None,
+
+            'is_linear'  : True,
+
+            'var_names' : var_names,
             'verbose' : 1,
         }),
         'tsn' : ('ts.newmark', {
@@ -273,6 +343,7 @@ def define(
             'beta' : 0.25,
             'gamma' : 0.5,
 
+            'var_names' : var_names,
             'verbose' : 1,
         }),
         'tsga' : ('ts.generalized_alpha', {
@@ -289,6 +360,7 @@ def define(
             'beta' : None,
             'gamma' : None,
 
+            'var_names' : var_names,
             'verbose' : 1,
         }),
         'tsb' : ('ts.bathe', {
@@ -299,6 +371,7 @@ def define(
 
             'is_linear'  : True,
 
+            'var_names' : var_names,
             'verbose' : 1,
         }),
         'tscedb' : ('tsc.ed_basic', {
@@ -328,10 +401,11 @@ def define(
 
         'save_times' : save_times,
 
-        'active_only' : False,
+        'active_only' : active_only,
+        'auto_transform_equations' : False,
 
         'output_format' : 'h5',
-        'output_dir' : 'output/ed',
+        'output_dir' : output_dir,
         'post_process_hook' : 'post_process',
     }
 

@@ -1,7 +1,8 @@
 r"""
-Compute homogenized elastic coefficients for a given  heterogeneous linear
-elastic microstructure, see [1] for details or [2] and [3] for a quick
-explanation.
+Compute homogenized elastic coefficients for a given heterogeneous linear
+elastic microstructure.
+
+See [1] for details or [2] and [3] for a quick explanation.
 
 [1] D. Cioranescu,  J.S.J. Paulin: Homogenization in open sets with holes.
 Journal of Mathematical Analysis and Applications 71(2), 1979, pages 590-607.
@@ -166,7 +167,7 @@ requirements = {
 }
 
 solvers = {
-    'ls': ('ls.scipy_direct', {}),
+    'ls': ('ls.auto_direct', {'use_presolve' : True}),
     'newton': ('nls.newton', {
         'i_max': 1,
         'eps_a': 1e-4,

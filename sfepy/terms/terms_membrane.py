@@ -94,7 +94,7 @@ class TLMembraneTerm(Term):
                   'material_h0' : '1, 1',
                   'virtual' : ('D', 'state'), 'state' : 'D'}
     geometries = ['3_4', '3_8']
-    integration = 'surface'
+    integration = 'facet'
 
     @staticmethod
     def function(out, fun, *args):
@@ -166,7 +166,7 @@ class TLMembraneTerm(Term):
         vv, vu = virtual, state
 
         sg, _ = self.get_mapping(vv)
-        sd = vv.field.surface_data[self.region.name]
+        sd = vv.field.extra_data[f'sd_{self.region.name}']
 
         if self.mtx_t is None:
             aux = membranes.describe_geometry(vu.field,

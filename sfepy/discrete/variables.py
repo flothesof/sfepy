@@ -37,7 +37,7 @@ def create_adof_conns(conn_info, var_indx=None, active_only=True, verbose=True):
     and connectivity with all DOFs active is created.
 
     DOF connectivity key is a tuple ``(primary variable name, region name,
-    type, is_trace flag)``.
+    type, trace_region)``.
 
     Notes
     -----
@@ -67,18 +67,19 @@ def create_adof_conns(conn_info, var_indx=None, active_only=True, verbose=True):
 
         return adc
 
-    def _assign(adof_conns, info, region, var, field, is_trace):
-        key = (var.name, region.name, info.dc_type.type, is_trace)
+    def _assign(adof_conns, dof_conn_type, region, var, field, trace_region):
+        key = (var.name, region.name, dof_conn_type, trace_region)
         if not key in adof_conns:
-            econn = field.get_econn(info.dc_type, region, is_trace=is_trace)
+            econn = field.get_econn(dof_conn_type, region, trace_region)
             if econn is None: return
 
             adof_conns[key] = _create(var, econn)
 
-        if info.is_trace:
-            key = (var.name, region.name, info.dc_type.type, False)
+        if trace_region is not None:
+            key = (var.name, region.name, dof_conn_type, None)
             if not key in adof_conns:
-                econn = field.get_econn(info.dc_type, region, is_trace=False)
+                econn = field.get_econn(dof_conn_type, region,
+                                        trace_region=None)
 
                 adof_conns[key] = _create(var, econn)
 
@@ -92,21 +93,26 @@ def create_adof_conns(conn_info, var_indx=None, active_only=True, verbose=True):
         if info.primary is not None:
             var = info.primary
             field = var.get_field()
-            field.setup_extra_data(info.ps_tg, info, info.is_trace)
 
             region = info.get_region()
-            _assign(adof_conns, info, region, var, field, info.is_trace)
+            field.setup_extra_data(info)
 
-        if info.has_virtual and not info.is_trace:
+            mreg_name = info.get_region_name(can_trace=False)
+            mreg_name = None if region.name == mreg_name else mreg_name
+            dct = info.dof_conn_types[var.name]
+            _assign(adof_conns, dct, region, var, field, mreg_name)
+
+        if info.has_virtual and info.trace_region is None:
             var = info.virtual
             field = var.get_field()
-            field.setup_extra_data(info.v_tg, info, False)
+            field.setup_extra_data(info)
 
             aux = var.get_primary()
             var = aux if aux is not None else var
 
             region = info.get_region(can_trace=False)
-            _assign(adof_conns, info, region, var, field, False)
+            dct = info.dof_conn_types[var.name]
+            _assign(adof_conns, dct, region, var, field, None)
 
     if verbose:
         output('...done in %.2f s' % timer.stop())
@@ -161,11 +167,6 @@ class Variables(Container):
 
     @staticmethod
     def from_conf(conf, fields):
-        """
-        This method resets the variable counters for automatic order!
-        """
-        Variable.reset()
-
         obj = Variables()
         for key, val in six.iteritems(conf):
             var = Variable.from_conf(key, val, fields)
@@ -173,7 +174,6 @@ class Variables(Container):
             obj[var.name] = var
 
         obj.setup_dtype()
-        obj.setup_ordering()
 
         return obj
 
@@ -194,8 +194,6 @@ class Variables(Container):
         if variables is not None:
             for var in variables:
                 self[var.name] = var
-
-            self.setup_ordering()
 
         self.setup_dtype()
 
@@ -278,42 +276,49 @@ class Variables(Container):
         """
         self.link_duals()
 
-        orders = []
-        for var in self:
-            try:
-                orders.append(var._order)
-            except:
-                pass
-        orders.sort()
+        is_given = [self[name]._order is not None for name in self.state]
+        if any(is_given) and not all(is_given):
+            raise ValueError('either all or none of state variables have to'
+                             ' be created with a given order!')
 
-        self.ordered_state = [None] * len(self.state)
-        for var in self.iter_state(ordered=False):
-            ii = orders.index(var._order)
-            self.ordered_state[ii] = var.name
+        if all(is_given):
+            aux = [self[name]._order for name in self.state]
+            orders = [(self[name]._order, name) for name in self.state]
+        else:
+            orders = [ii for ii in enumerate(self.state)]
 
-        self.ordered_virtual = [None] * len(self.virtual)
-        ii = 0
-        for var in self.iter_state(ordered=False):
-            if var.dual_var_name is not None:
-                self.ordered_virtual[ii] = var.dual_var_name
-                ii += 1
+        if len(orders):
+            self.ordered_state = [name for order, name in sorted(orders)]
+            self.ordered_virtual = [var.dual_var_name
+                                    for var in self.iter_state(ordered=True)
+                                    if var.dual_var_name is not None]
 
     def has_virtuals(self):
         return len(self.virtual) > 0
+
+    def _create_dof_info(self, ordered_vars, flag, active=False):
+        orders = {}
+        di = DofInfo(f'{flag}_dof_info')
+        for var_name in ordered_vars:
+            var = self[var_name]
+            order = var._order
+            if order in orders:
+                di.append_variable(var, active=active, shared=orders[order])
+            else:
+                di.append_variable(var, active=active)
+                if order is not None:
+                    orders[order] = var_name
+
+        return di
 
     def setup_dof_info(self, make_virtual=False):
         """
         Setup global DOF information.
         """
-        self.di = DofInfo('state_dof_info')
-        for var_name in self.ordered_state:
-            self.di.append_variable(self[var_name])
+        self.di = self._create_dof_info(self.ordered_state, 'state')
 
         if make_virtual:
-            self.vdi = DofInfo('virtual_dof_info')
-            for var_name in self.ordered_virtual:
-                self.vdi.append_variable(self[var_name])
-
+            self.vdi = self._create_dof_info(self.ordered_virtual, 'virtual')
         else:
             self.vdi = self.di
 
@@ -437,15 +442,13 @@ class Variables(Container):
                                                problem=problem)
                 active_bcs.update(active)
 
-        self.adi = DofInfo('active_state_dof_info')
-        for var_name in self.ordered_state:
-            self.adi.append_variable(self[var_name], active=active_only)
+        self.adi = self._create_dof_info(self.ordered_state, 'active_state',
+                                         active=active_only)
 
         if self.has_virtual_dcs:
-            self.avdi = DofInfo('active_virtual_dof_info')
-            for var_name in self.ordered_virtual:
-                self.avdi.append_variable(self[var_name], active=active_only)
-
+            self.avdi = self._create_dof_info(self.ordered_virtual,
+                                              'active_virtual',
+                                              active=active_only)
         else:
             self.avdi = self.adi
 
@@ -472,7 +475,7 @@ class Variables(Container):
         if not self.has_eq_map:
             raise ValueError('call equation_mapping() first!')
 
-        return (self.avdi.ptr[-1], self.adi.ptr[-1])
+        return (self.avdi.n_dof_total, self.adi.n_dof_total)
 
     def setup_initial_conditions(self, ics, functions):
         self.ics = ics
@@ -514,11 +517,11 @@ class Variables(Container):
                     var.adof_conns[key] = val
 
     def create_vec(self):
-        vec = nm.zeros((self.di.ptr[-1],), dtype=self.dtype)
+        vec = nm.zeros((self.di.n_dof_total,), dtype=self.dtype)
         return vec
 
     def create_reduced_vec(self):
-        vec = nm.zeros((self.adi.ptr[-1],), dtype=self.dtype)
+        vec = nm.zeros((self.adi.n_dof_total,), dtype=self.dtype)
         return vec
 
     def check_vec_size(self, vec, reduced=False):
@@ -568,7 +571,7 @@ class Variables(Container):
         to False, for assembled vectors it should be set to True.
         """
         if svec is None:
-            svec = nm.empty((self.adi.ptr[-1],), dtype=self.dtype)
+            svec = nm.empty((self.adi.n_dof_total,), dtype=self.dtype)
         for var in self.iter_state():
             aindx = self.adi.indx[var.name]
             svec[aindx] = var.get_reduced(vec, self.di.indx[var.name].start,
@@ -674,28 +677,20 @@ class Variables(Container):
         for var in self.iter_state():
             var.apply_ic(vec, self.di.indx[var.name].start, force_values)
 
-    def has_ebc(self, vec=None, force_values=None):
+    def has_ebc(self, vec=None, force_values=None, verbose=False):
         if vec is None:
             vec = self.vec
 
-        for var_name in self.di.var_names:
-            eq_map = self[var_name].eq_map
-            i0 = self.di.indx[var_name].start
-            ii = i0 + eq_map.eq_ebc
-            if force_values is None:
-                if not nm.allclose(vec[ii], eq_map.val_ebc):
-                    return False
-            else:
-                if isinstance(force_values, dict):
-                    if not nm.allclose(vec[ii], force_values[var_name]):
-                        return False
-                else:
-                    if not nm.allclose(vec[ii], force_values):
-                        return False
-            # EPBC.
-            if not nm.allclose(vec[i0+eq_map.master], vec[i0+eq_map.slave]):
-                return False
-        return True
+        ok = True
+        for var in self.iter_state():
+            _ok = self[var.name].has_ebc(vec=vec[self.di.indx[var.name]],
+                                         force_values=force_values)
+            ok = ok and _ok
+
+            if verbose:
+                output(f'variable {var.name} has E(P)BC:', _ok)
+
+        return ok
 
     def set_data(self, data, step=0, ignore_unknown=False,
                  preserve_caches=False):
@@ -816,11 +811,17 @@ class Variables(Container):
 
         return out
 
-    def set_state(self, vec, reduced=False, force=False, preserve_caches=False):
+    def set_state(self, vec, reduced=False, force=False, preserve_caches=False,
+                  apply_ebc=False):
+        preserve_caches = preserve_caches and (not apply_ebc)
         if reduced:
             self.set_reduced_state(vec, preserve_caches=preserve_caches)
+            if apply_ebc:
+                self.apply_ebc()
 
         else:
+            if apply_ebc:
+                self.apply_ebc(vec)
             self.set_full_state(vec, force=force,
                                 preserve_caches=preserve_caches)
 
@@ -956,15 +957,6 @@ class Variables(Container):
             var.advance(ts)
 
 class Variable(Struct):
-    _count = 0
-    _orders = []
-    _all_var_names = set()
-
-    @staticmethod
-    def reset():
-        Variable._count = 0
-        Variable._orders = []
-        Variable._all_var_names = set()
 
     @staticmethod
     def from_conf(key, conf, fields):
@@ -1046,22 +1038,11 @@ class Variable(Struct):
             self.data.append(None)
 
         self._set_kind(kind, order, primary_var_name, special=special)
-        Variable._all_var_names.add(name)
 
     def _set_kind(self, kind, order, primary_var_name, special=None):
         if kind == 'unknown':
             self.flags.add(is_state)
-            if order is not None:
-                if order in Variable._orders:
-                    raise ValueError('order %d already used!' % order)
-                else:
-                    self._order = order
-                    Variable._orders.append(order)
-
-            else:
-                self._order = Variable._count
-                Variable._orders.append(self._order)
-            Variable._count += 1
+            self._order = order
 
             self.dof_name = self.name
 
@@ -1422,7 +1403,7 @@ class FieldVariable(Variable):
         elif kind == 'ic':
             sargs = (coors, )
 
-        skwargs = {'region' : region}
+        skwargs = {'region' : region, 'variable' : self}
 
         return setter, sargs, skwargs
 
@@ -1446,7 +1427,7 @@ class FieldVariable(Variable):
                                      return_key=return_key)
         return out
 
-    def get_dof_conn(self, dc_type, is_trace=False, trace_region=None):
+    def get_dof_conn(self, region_name, dct, trace_region=None):
         """
         Get active dof connectivity of a variable.
 
@@ -1462,15 +1443,15 @@ class FieldVariable(Variable):
         else:
             var_name = self.name
 
-        if not is_trace:
-            region_name = dc_type.region_name
-
+        if trace_region is None:
+            mregion_name = None
         else:
-            aux = self.field.domain.regions[dc_type.region_name]
-            region = aux.get_mirror_region(trace_region)
+            mregion = self.field.domain.regions[region_name]
+            region = mregion.get_mirror_region(trace_region)
             region_name = region.name
+            mregion_name = mregion.name
 
-        key = (var_name, region_name, dc_type.type, is_trace)
+        key = (var_name, region_name, dct, mregion_name)
         dc = self.adof_conns[key]
 
         return dc
@@ -1552,6 +1533,23 @@ class FieldVariable(Variable):
             The set of boundary conditions active in the current time.
         """
         self.eq_map = EquationMap('eq_map', self.dofs, var_di)
+
+        if var_di.shared_dofs_with is not None:
+            svar = self._variables[var_di.shared_dofs_with]
+            eq_map = self.eq_map
+            seq_map = svar.eq_map
+            eq_map.eq = seq_map.eq
+            eq_map.eq_ebc = seq_map.eq_ebc
+            eq_map.eqi = seq_map.eqi
+            eq_map.master = seq_map.master
+            eq_map.n_eq = seq_map.n_eq
+            eq_map.slave = seq_map.slave
+            eq_map.val_ebc = seq_map.val_ebc
+
+            self.n_adof = eq_map.n_eq
+
+            return {}
+
         if bcs is not None:
             bcs.canonize_dof_names(self.dofs)
             bcs.sort()
@@ -1595,7 +1593,7 @@ class FieldVariable(Variable):
 
             self.initial_condition[eq] = nm.ravel(vv)
 
-    def get_data_shape(self, integral, integration='volume', region_name=None):
+    def get_data_shape(self, integral, integration='cell', region_name=None):
         """
         Get element data dimensions for given approximation.
 
@@ -1603,8 +1601,8 @@ class FieldVariable(Variable):
         ----------
         integral : Integral instance
             The integral describing used numerical quadrature.
-        integration : 'volume', 'surface', 'surface_extra', 'point' or 'custom'
-            The term integration type.
+        integration : 'cell', 'facet', 'facet_extra', 'point' or 'custom'
+            The term integration mode.
         region_name : str
             The name of the region of the integral.
 
@@ -1651,8 +1649,8 @@ class FieldVariable(Variable):
 
     def evaluate(self, mode='val',
                  region=None, integral=None, integration=None,
-                 step=0, time_derivative=None, is_trace=False,
-                 trace_region=None, dt=None, bf=None):
+                 step=0, time_derivative=None, trace_region=None,
+                 dt=None, bf=None):
         """
         Evaluate various quantities related to the variable according to
         `mode` in quadrature points defined by `integral`.
@@ -1671,16 +1669,16 @@ class FieldVariable(Variable):
             The integral defining quadrature points in which the
             evaluation occurs. If None, the first order volume integral
             is created. Must not be None for surface integrations.
-        integration : 'volume', 'surface', 'surface_extra', or 'point'
+        integration : 'cell', 'facet', 'facet_extra', or 'point'
             The term integration type. If None, it is derived from
-            `integral`.
+            the region kind.
         step : int, default 0
             The time step (0 means current, -1 previous, ...).
         time_derivative : None or 'dt'
             If not None, return time derivative of the data,
             approximated by the backward finite difference.
-        is_trace : bool, default False
-            Indicate evaluation of trace of the variable on a boundary
+        trace_region : None or str
+            If not None, evaluate of trace of the variable on a boundary
             region.
         dt : float, optional
             The time step to be used if `derivative` is `'dt'`. If None,
@@ -1706,8 +1704,10 @@ class FieldVariable(Variable):
         if region is None:
             region = field.region
 
-        if is_trace:
-            region = region.get_mirror_region(trace_region)
+        if trace_region is not None:
+            mregion = region.get_mirror_region(trace_region)
+            trace_region = region.name
+            region = mregion
 
         if (region is not field.region) and not region.is_empty:
             assert_(field.region.contains(region))
@@ -1716,21 +1716,21 @@ class FieldVariable(Variable):
             integral = Integral('aux_1', 1)
 
         if integration is None:
-            integration = 'volume' if region.can_cells else 'surface'
+            integration = region.kind
 
         geo, _, key = field.get_mapping(region, integral, integration,
                                         return_key=True)
-        key += (time_derivative, is_trace)
+        key += (time_derivative, trace_region)
+
+        dct = ('cell' if integration == 'facet_extra' else integration,
+               region.tdim)
 
         if key in cache:
             out = cache[key]
 
         else:
             vec = self(step=step, derivative=time_derivative, dt=dt)
-            ct = integration
-            if integration == 'surface_extra':
-                ct = 'volume'
-            conn = field.get_econn(ct, region, is_trace, integration)
+            conn = field.get_econn(dct, region, trace_region)
 
             shape = self.get_data_shape(integral, integration, region.name)
 
@@ -1815,6 +1815,25 @@ class FieldVariable(Variable):
 
             else:
                 vec[ii] = force_values
+
+    def has_ebc(self, vec=None, force_values=None):
+        eq_map = self.eq_map
+        ii = eq_map.eq_ebc
+        if force_values is None:
+            if not nm.allclose(vec[ii], eq_map.val_ebc):
+                return False
+        else:
+            if isinstance(force_values, dict):
+                if not nm.allclose(vec[ii], force_values[self.name]):
+                    return False
+            else:
+                if not nm.allclose(vec[ii], force_values):
+                    return False
+        # EPBC.
+        if not nm.allclose(vec[eq_map.master], vec[eq_map.slave]):
+            return False
+
+        return True
 
     def get_reduced(self, vec, offset=0, follow_epbc=False):
         """
@@ -1927,9 +1946,10 @@ class FieldVariable(Variable):
 
         integral = Integral('i_tmp', 1)
 
-        vg, _ = field.get_mapping(field.region, integral, 'volume')
+        vg, _ = field.get_mapping(field.region, integral, 'cell')
 
-        diameters = domain.get_element_diameters(cells, vg, mode, square=square)
+        diameters = domain.get_element_diameters(cells, vg.volume, mode,
+                                                 square=square)
 
         return diameters
 

@@ -10,6 +10,10 @@ import sfepy.base.testing as tst
 filename_meshes = [data_dir + '/meshes/elements/%s_2.mesh' % geom
                    for geom in ['1_2', '2_3', '2_4', '3_4', '3_8', '3_2_4']]
 
+not_tested_terms = ['dw_ns_dot_grad_s',
+                    'dw_lin_spring', 'dw_lin_truss', 'ev_lin_truss_force']
+
+
 def make_term_args(arg_shapes, arg_kinds, arg_types, ats_mode, domain,
                    material_value=None, poly_space_base=None):
     from sfepy.base.base import basestr
@@ -35,6 +39,9 @@ def make_term_args(arg_shapes, arg_kinds, arg_types, ats_mode, domain,
 
             elif sh == 'N': # General number ;)
                 return 1
+
+            elif sh == 'str':
+                return 'str'
 
             else:
                 return int(sh)
@@ -111,27 +118,34 @@ def make_term_args(arg_shapes, arg_kinds, arg_types, ats_mode, domain,
                 if len(aux) == 2:
                     prefix, sh = aux
 
-            if material_value is None:
-                material_value = 1.0
+            value = material_value
+            if value is None:
+                value = 1.0
+
+            elif isinstance(value, dict):
+                value = material_value.get(arg_types[ii], 1.0)
 
             shape = _parse_tuple_shape(sh)
-            if (len(shape) > 1) or (shape[0] > 1):
+            if 'str' in shape:
+                values = {'.c%d' % ii : value}
+
+            elif (len(shape) > 1) or (shape[0] > 1):
                 if ((len(shape) == 2) and (shape[0] ==  shape[1])
-                    and (material_value != 0.0)):
+                    and (value != 0.0)):
                     # Identity matrix.
                     val = nm.eye(shape[0], dtype=nm.float64)
 
                 else:
                     # Array.
                     val = nm.empty(shape, dtype=nm.float64)
-                    val.fill(material_value)
+                    val.fill(value)
 
                 values = {'%sc%d' % (prefix, ii)
                           : val}
 
             elif (len(shape) == 1) and (shape[0] == 1):
                 # Single scalar as a special value.
-                values = {'.c%d' % ii : material_value}
+                values = {'.c%d' % ii : value}
 
             else:
                 raise ValueError('wrong material shape! (%s)' % shape)
@@ -149,7 +163,7 @@ def make_term_args(arg_shapes, arg_kinds, arg_types, ats_mode, domain,
 
         else:
             str_args.append('user%d' % ii)
-            args[str_args[-1]] = None
+            args[str_args[-1]] = sh if callable(sh) else None
 
     materials = Materials(materials)
     variables = Variables(variables)
@@ -221,6 +235,9 @@ def _test_single_term(data, term_cls, domain, rname):
 
             if 'dw_s_dot_grad_i_s' in term_cls.name:
                 material_value = 0.0
+
+            elif 'de_mass' in term_cls.name:
+                material_value = {'material_lumping' : 'row_sum'}
 
             else:
                 material_value = 1.0
@@ -307,15 +324,18 @@ def test_term_call_modes(data):
         for _, term_cls in ordered_iteritems(term_table):
             if (domain_geometry not in term_cls.geometries) \
                or ("dg" in term_cls.name) \
-               or (term_cls.name == "dw_ns_dot_grad_s"):
+               or (term_cls.name in not_tested_terms):
                 continue
 
-            if term_cls.integration == 'by_region':
-                rnames = ['Omega', 'Gamma']
-            else:
-                vint = ('volume', 'point', 'custom')
-                rnames = ['Omega'] if term_cls.integration in vint\
-                    else ['Gamma']
+            rnames = []
+            if ('cell' in term_cls.integration or
+                'point' in term_cls.integration or
+                'custom' in term_cls.integration):
+                rnames.append('Omega')
+
+            if ('facet' in term_cls.integration or
+                'facet_extra' in term_cls.integration):
+                rnames.append('Gamma')
 
             for rname in rnames:
                 tst.report('<-- %s.%s ...' % (term_cls.name, rname))

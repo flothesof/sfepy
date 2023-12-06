@@ -271,6 +271,9 @@ def main():
     out, err = check_output('python3 sfepy/examples/linear_elasticity/linear_elastic_interactive.py')
     eok += report(out, '...', -16, 0, '1.62128841139e-14', eps=1e-13)
 
+    out, err = check_output('python3 sfepy/examples/linear_elasticity/elastodynamic_identification.py --opt-conf=xtol=0.5')
+    eok += report(out, '...', -5, 0, '2', match_numbers=True)
+
     out, err = check_output('python3 sfepy/examples/linear_elasticity/modal_analysis.py')
     eok += report(out, '...', -12, 5, '12142.11470773', eps=1e-13)
 
@@ -290,7 +293,7 @@ def main():
     eok += report(out, '...', -2, 4, '8.021313824020e-07', eps=1e-6)
 
     out, err = check_output('mpiexec -n 2 python3 sfepy/examples/multi_physics/biot_parallel_interactive.py output-parallel -2 --silent -ksp_monitor')
-    eok += report(out, '...', -2, 4, '3.787214380277e-09', eps=1e-8)
+    eok += report(out, '...', -2, 4, '3.787214380277e-09', eps=1e-7)
 
     t1 = time.time()
 

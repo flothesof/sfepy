@@ -211,18 +211,19 @@ class DiffusionCoupling(Term):
     def dw_fun(out, val, mat, bf, vg, fmode):
 
         if fmode == 0:
-            status = terms.mulAB_integrate(out, vg.bfg, mat * val, vg,
+            status = terms.mulAB_integrate(out, vg.bfg, mat * val, vg.cmap,
                                            mode='ATB')
 
         elif fmode == 1:
-            status = terms.mulAB_integrate(out, bf * mat, val, vg, mode='ATB')
+            status = terms.mulAB_integrate(out, bf * mat, val, vg.cmap,
+                                           mode='ATB')
 
         elif fmode == 2:
-            status = terms.mulAB_integrate(out, vg.bfg, mat * bf, vg,
+            status = terms.mulAB_integrate(out, vg.bfg, mat * bf, vg.cmap,
                                            mode='ATB')
 
         elif fmode == 3:
-            status = terms.mulAB_integrate(out, mat * bf, vg.bfg, vg,
+            status = terms.mulAB_integrate(out, mat * bf, vg.bfg, vg.cmap,
                                            mode='ATB')
 
         return status
@@ -296,8 +297,7 @@ class DiffusionVelocityTerm( Term ):
     name = 'ev_diffusion_velocity'
     arg_types = ('material', 'parameter')
     arg_shapes = {'material' : 'D, D', 'parameter' : 1}
-    integration = 'by_region'
-    surface_integration = 'surface_extra'
+    integration = ('cell', 'facet_extra')
 
     @staticmethod
     def function(out, grad, mat, vg, fmode):
@@ -349,7 +349,7 @@ class SurfaceFluxTerm(Term):
     name = 'ev_surface_flux'
     arg_types = ('material', 'parameter')
     arg_shapes = {'material' : 'D, D', 'parameter' : 1}
-    integration = 'surface_extra'
+    integration = 'facet_extra'
 
     function = staticmethod(terms.d_surface_flux)
 
@@ -388,13 +388,13 @@ class SurfaceFluxOperatorTerm(Term):
     arg_shapes = [{'opt_material' : 'D, D', 'virtual' : (1, 'state'),
                    'state' : 1},
                   {'opt_material' : None}]
-    integration = 'surface_extra'
+    integration = 'facet_extra'
     function = terms.dw_surface_flux
 
     def get_fargs(self, mat, virtual, state,
                   mode=None, term_mode=None, diff_var=None, **kwargs):
         sg, _ = self.get_mapping(state)
-        sd = state.field.surface_data[self.region.name]
+        sd = state.field.extra_data[f'sd_{self.region.name}']
         bf = state.field.get_base(sd.bkey, 0, self.integral)
 
         if mat is None:
@@ -403,7 +403,7 @@ class SurfaceFluxOperatorTerm(Term):
             mat[..., :, :] = nm.eye(dim, dtype=nm.float64)
 
         if diff_var is None:
-            grad = self.get(state, 'grad', integration='surface_extra')
+            grad = self.get(state, 'grad', integration='facet_extra')
             fmode = 0
 
         else:
@@ -479,3 +479,53 @@ class AdvectDivFreeTerm(ScalarDotMGradScalarTerm):
     arg_shapes = {'material' : 'D, 1', 'virtual' : ('1', 'state'),
                   'state' : '1'}
     mode = 'grad_state'
+
+
+class NonlinearDiffusionTerm(Term):
+    r"""
+    The diffusion term with a scalar coefficient given by a user
+    supplied function of the state variable.
+
+    :Definition:
+
+    .. math::
+        \int_{\Omega} \nabla q \cdot \nabla p f(p)
+
+    :Arguments:
+        - fun : :math:`f(p)`
+        - dfun : :math:`\partial f(p) / \partial p`
+        - virtual : :math:`q`
+        - state : :math:`p`
+    """
+    name = 'dw_nl_diffusion'
+    arg_types = ('fun', 'dfun', 'virtual', 'state')
+    arg_shapes = {'fun'     : lambda x: x,
+                  'dfun'    : lambda x: x,
+                  'virtual' : (1, 'state'),
+                  'state'   : 1}
+
+    @staticmethod
+    def function(out, out_qp, geo):
+        status = geo.integrate(out, out_qp)
+        return status
+
+    def get_fargs(self, fun, dfun, var1, var2,
+                  mode=None, term_mode=None, diff_var=None, **kwargs):
+        vg1, _ = self.get_mapping(var1)
+        vg2, _ = self.get_mapping(var2)
+
+        if diff_var is None:
+            geo = vg1
+            val_grad_qp = self.get(var2, 'grad')
+            val_qp = fun(self.get(var2, 'val'))
+            out_qp = dot_sequences(vg1.bfg, val_grad_qp*val_qp,'ATB')
+
+        else:
+            geo = vg1
+            val_grad_qp = self.get(var2, 'grad')
+            val_d_qp = dfun(self.get(var2, 'val'))
+            val_qp = fun(self.get(var2, 'val'))
+            out_qp = (dot_sequences(vg1.bfg, vg2.bfg*val_qp,'ATB') +
+                      dot_sequences(vg1.bfg, val_grad_qp*val_d_qp,'ATB')*vg2.bf)
+
+        return out_qp, geo

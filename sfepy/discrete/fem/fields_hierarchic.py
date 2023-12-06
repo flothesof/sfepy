@@ -3,16 +3,16 @@ import numpy as nm
 from sfepy.base.base import assert_
 from sfepy.discrete.fem.utils import prepare_remap, prepare_translate
 from sfepy.discrete.common.dof_info import expand_nodes_to_dofs
-from sfepy.discrete.fem.fields_base import VolumeField, H1Mixin
+from sfepy.discrete.fem.fields_base import FEField, H1Mixin
 
-class H1HierarchicVolumeField(H1Mixin, VolumeField):
+class H1HierarchicVolumeField(H1Mixin, FEField):
     family_name = 'volume_H1_lobatto'
 
     def _init_econn(self):
         """
         Initialize the extended DOF connectivity and facet orientation array.
         """
-        VolumeField._init_econn(self)
+        FEField._init_econn(self)
 
         self.ori = nm.zeros_like(self.econn)
 
@@ -49,7 +49,7 @@ class H1HierarchicVolumeField(H1Mixin, VolumeField):
         facet_desc = nm.array(facet_desc)
         n_dof_per_facet = facet_desc.shape[1]
 
-        cmesh = self.domain.cmesh
+        cmesh = self.cmesh
 
         facets = self.region.entities[dim]
         ii = nm.arange(facets.shape[0], dtype=nm.int32)
@@ -58,7 +58,7 @@ class H1HierarchicVolumeField(H1Mixin, VolumeField):
         # Prepare global facet id remapping to field-local numbering.
         remap = prepare_remap(facets, cmesh.num[dim])
 
-        cconn = self.region.domain.cmesh.get_conn(self.region.tdim, dim)
+        cconn = cmesh.get_conn(self.region.tdim, dim)
         offs = cconn.offsets
 
         n_f = self.gel.edges.shape[0] if dim == 1 else self.gel.faces.shape[0]
@@ -170,7 +170,7 @@ class H1HierarchicVolumeField(H1Mixin, VolumeField):
         n_dof_per_cell = self.node_desc.bubble.shape[0]
 
         ii = self.region.get_cells()
-        remap = prepare_remap(ii, self.domain.cmesh.n_el)
+        remap = prepare_remap(ii, self.cmesh.n_el)
 
         n_cell = ii.shape[0]
         n_dof = n_dof_per_cell * n_cell
@@ -235,7 +235,7 @@ class H1HierarchicVolumeField(H1Mixin, VolumeField):
         gps = self.gel.poly_space
         mesh = self.create_mesh(extra_nodes=False)
 
-        ctx = geo_ctx = gps.create_context(mesh.cmesh, 0, 1e-15, 100, 1e-8)
+        ctx = geo_ctx = gps.create_context(self.cmesh, 0, 1e-15, 100, 1e-8)
         ctx.geo_ctx = geo_ctx
 
         return ctx

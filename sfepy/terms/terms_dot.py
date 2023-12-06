@@ -33,29 +33,29 @@ class DotProductTerm(Term):
     arg_types = (('opt_material', 'virtual', 'state'),
                  ('opt_material', 'parameter_1', 'parameter_2'))
     arg_shapes_dict = {
-        'volume': [{'opt_material' : '1, 1', 'virtual' : (1, 'state'),
-                    'state' : 1, 'parameter_1' : 1, 'parameter_2' : 1},
-                   {'opt_material' : None},
-                   {'opt_material' : '1, 1', 'virtual' : ('D', 'state'),
-                    'state' : 'D', 'parameter_1' : 'D', 'parameter_2' : 'D'},
-                   {'opt_material' : 'D, D'},
-                   {'opt_material' : None}],
-        'surface': [{'opt_material' : '1, 1', 'virtual' : (1, 'state'),
-                     'state' : 1, 'parameter_1' : 1, 'parameter_2' : 1},
-                    {'opt_material' : None},
-                    {'opt_material' : '1, 1', 'virtual' : (1, None),
-                    'state' : 'D'},
-                    {'opt_material' : None},
-                    {'opt_material' : '1, 1', 'virtual' : ('D', None),
-                    'state' : 1},
-                    {'opt_material' : None},
-                    {'opt_material' : '1, 1', 'virtual' : ('D', 'state'),
-                    'state' : 'D', 'parameter_1' : 'D', 'parameter_2' : 'D'},
-                    {'opt_material' : 'D, D'},
-                    {'opt_material' : None}]
+        'cell': [{'opt_material' : '1, 1', 'virtual' : (1, 'state'),
+                  'state' : 1, 'parameter_1' : 1, 'parameter_2' : 1},
+                 {'opt_material' : None},
+                 {'opt_material' : '1, 1', 'virtual' : ('D', 'state'),
+                  'state' : 'D', 'parameter_1' : 'D', 'parameter_2' : 'D'},
+                 {'opt_material' : 'D, D'},
+                 {'opt_material' : None}],
+        'facet': [{'opt_material' : '1, 1', 'virtual' : (1, 'state'),
+                   'state' : 1, 'parameter_1' : 1, 'parameter_2' : 1},
+                  {'opt_material' : None},
+                  {'opt_material' : '1, 1', 'virtual' : (1, None),
+                   'state' : 'D'},
+                  {'opt_material' : None},
+                  {'opt_material' : '1, 1', 'virtual' : ('D', None),
+                   'state' : 1},
+                  {'opt_material' : None},
+                  {'opt_material' : '1, 1', 'virtual' : ('D', 'state'),
+                   'state' : 'D', 'parameter_1' : 'D', 'parameter_2' : 'D'},
+                  {'opt_material' : 'D, D'},
+                  {'opt_material' : None}]
     }
     modes = ('weak', 'eval')
-    integration = 'by_region'
+    integration = ('cell', 'facet')
 
     @staticmethod
     def dw_dot(out, mat, val_qp, vgeo, sgeo, fun, fmode):
@@ -111,7 +111,7 @@ class DotProductTerm(Term):
                 fmode = 1
 
             if state.n_components > 1:
-                if ((self.integration == 'volume')
+                if ((self.act_integration == 'cell')
                     or (virtual.n_components > 1)):
                     fun = terms.dw_volume_dot_vector
 
@@ -119,7 +119,7 @@ class DotProductTerm(Term):
                     fun = terms.dw_surface_s_v_dot_n
 
             else:
-                if ((self.integration == 'volume')
+                if ((self.act_integration == 'cell')
                     or (virtual.n_components == 1)):
                     fun = terms.dw_volume_dot_scalar
 
@@ -172,7 +172,7 @@ class BCNewtonTerm(DotProductTerm):
     arg_shapes = {'material_1' : '1, 1', 'material_2' : '1, 1',
                   'virtual' : (1, 'state'), 'state' : 1}
     mode = 'weak'
-    integration = 'surface'
+    integration = 'facet'
     arg_shapes_dict = None
 
     def get_fargs(self, alpha, p_outer, virtual, state,
@@ -404,10 +404,10 @@ class VectorDotScalarTerm(Term):
             status1 = terms.actBfT(aux, bfve, mat)
 
         if fmode == 0:
-            status2 = terms.mulAB_integrate(out, aux, val_qp, geo, 'AB')
+            status2 = terms.mulAB_integrate(out, aux, val_qp, geo.cmap, 'AB')
 
         if fmode == 1:
-            status2 = terms.mulAB_integrate(out, aux, bfsc, geo, 'AB')
+            status2 = terms.mulAB_integrate(out, aux, bfsc, geo.cmap, 'AB')
 
         if fmode == 2:
             aux = (bfsc * dot_sequences(mat, val_qp,
@@ -415,7 +415,7 @@ class VectorDotScalarTerm(Term):
             status2 = geo.integrate(out, nm.ascontiguousarray(aux))
 
         if fmode == 3:
-            status2 = terms.mulAB_integrate(out, bfsc, aux, geo, 'ATBT')
+            status2 = terms.mulAB_integrate(out, bfsc, aux, geo.cmap, 'ATBT')
 
         return status1 and status2
 
@@ -509,13 +509,13 @@ class ScalarDotGradIScalarTerm(Term):
 
         if fmode == 0:
             status = terms.mulAB_integrate(out, bft,
-                                           cc(grad[..., idx:idx+1, :]), vg,
-                                           mode='ATB')
+                                           cc(grad[..., idx:idx+1, :]),
+                                           vg.cmap, mode='ATB')
 
         else:
             status = terms.mulAB_integrate(out, bft,
-                                           cc(vg.bfg[:,:,idx:(idx + 1),:]), vg,
-                                           mode='ATB')
+                                           cc(vg.bfg[:,:,idx:(idx + 1),:]),
+                                           vg.cmap, mode='ATB')
 
         return status
 

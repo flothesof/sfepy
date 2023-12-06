@@ -19,8 +19,7 @@ from sfepy.discrete.fem.utils import prepare_remap
 from sfepy.discrete.common.dof_info import expand_nodes_to_dofs
 from sfepy.discrete.common.mappings import get_physical_qps
 from sfepy.discrete.fem.facets import get_facet_dof_permutations
-from sfepy.discrete.fem.fields_base import (FEField, VolumeField, SurfaceField,
-                                            H1Mixin)
+from sfepy.discrete.fem.fields_base import FEField, H1Mixin
 
 class GlobalNodalLikeBasis(Struct):
 
@@ -69,7 +68,7 @@ class GlobalNodalLikeBasis(Struct):
         facet_desc = nm.array(facet_desc)
         n_dof_per_facet = facet_desc.shape[1]
 
-        cmesh = self.domain.cmesh
+        cmesh = self.cmesh
 
         facets = self.region.entities[dim]
         ii = nm.arange(facets.shape[0], dtype=nm.int32)
@@ -78,7 +77,7 @@ class GlobalNodalLikeBasis(Struct):
         # Prepare global facet id remapping to field-local numbering.
         remap = prepare_remap(facets, cmesh.num[dim])
 
-        cconn = self.region.domain.cmesh.get_conn(self.region.tdim, dim)
+        cconn = cmesh.get_conn(self.region.tdim, dim)
         offs = cconn.offsets
 
         n_f = self.gel.edges.shape[0] if dim == 1 else self.gel.faces.shape[0]
@@ -126,7 +125,7 @@ class GlobalNodalLikeBasis(Struct):
         n_dof_per_cell = self.node_desc.bubble.shape[0]
 
         ii = self.region.get_cells()
-        remap = prepare_remap(ii, self.domain.cmesh.n_el)
+        remap = prepare_remap(ii, self.cmesh.n_el)
 
         n_cell = ii.shape[0]
         n_dof = n_dof_per_cell * n_cell
@@ -398,7 +397,7 @@ class H1NodalMixin(H1Mixin, GlobalNodalLikeBasis):
 
         return ctx
 
-class H1NodalVolumeField(H1NodalMixin, VolumeField):
+class H1NodalVolumeField(H1NodalMixin, FEField):
     family_name = 'volume_H1_lagrange'
 
     def interp_v_vals_to_n_vals(self, vec):
@@ -439,12 +438,30 @@ class H1SNodalVolumeField(H1NodalVolumeField):
         gps = self.gel.poly_space
         mesh = self.create_mesh(extra_nodes=False)
 
-        ctx = geo_ctx = gps.create_context(mesh.cmesh, 0, 1e-15, 100, 1e-8)
+        ctx = geo_ctx = gps.create_context(self.cmesh, 0, 1e-15, 100, 1e-8)
         ctx.geo_ctx = geo_ctx
 
         return ctx
 
-class H1DiscontinuousField(H1NodalMixin, VolumeField):
+class H1SEMVolumeField(H1NodalVolumeField):
+    family_name = 'volume_H1_sem'
+
+    def create_basis_context(self):
+        """
+        Create the context required for evaluating the field basis.
+        """
+        # Hack for tests to pass - the reference coordinates are determined
+        # from vertices only - we can use the Lagrange basis context for the
+        # moment. The true context for Field.evaluate_at() is not implemented.
+        gps = self.gel.poly_space
+        mesh = self.create_mesh(extra_nodes=False)
+
+        ctx = geo_ctx = gps.create_context(self.cmesh, 0, 1e-15, 100, 1e-8)
+        ctx.geo_ctx = geo_ctx
+
+        return ctx
+
+class H1DiscontinuousField(H1NodalMixin, FEField):
     family_name = 'volume_H1_lagrange_discontinuous'
 
     def _setup_global_base(self):
@@ -456,7 +473,7 @@ class H1DiscontinuousField(H1NodalMixin, VolumeField):
         self._init_econn()
 
         ii = self.region.get_cells()
-        self.bubble_remap = prepare_remap(ii, self.domain.cmesh.n_el)
+        self.bubble_remap = prepare_remap(ii, self.cmesh.n_el)
 
         n_dof = nm.prod(self.econn.shape)
         all_dofs = nm.arange(n_dof, dtype=nm.int32)
@@ -506,7 +523,7 @@ class H1DiscontinuousField(H1NodalMixin, VolumeField):
 
         return vertex_dofs
 
-class H1NodalSurfaceField(H1NodalMixin, SurfaceField):
+class H1NodalSurfaceField(H1NodalMixin, FEField):
     """
     A field defined on a surface region.
     """
@@ -529,3 +546,6 @@ class H1NodalSurfaceField(H1NodalMixin, SurfaceField):
 
 class H1SNodalSurfaceField(H1NodalSurfaceField):
     family_name = 'surface_H1_serendipity'
+
+class H1SEMSurfaceField(H1NodalSurfaceField):
+    family_name = 'surface_H1_sem'

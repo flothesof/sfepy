@@ -47,6 +47,9 @@
 .. _WinPython: https://winpython.github.io/
 
 .. _cython: http://cython.org
+.. _scikit-build: https://scikit-build.readthedocs.io
+.. _cmake: https://cmake.org/
+.. _ninja: https://ninja-build.org/
 .. _pytables: http://www.pytables.org
 .. _sympy: http://sympy.org
 .. _ipython: http://ipython.org
@@ -110,3 +113,5 @@
 .. _PETSc Users Manual: http://www.mcs.anl.gov/petsc/petsc-current/docs/manual.pdf
 .. _PETSc Documentation: http://www.mcs.anl.gov/petsc/petsc-current/docs
 .. _MUMPS: http://mumps-solver.org
+.. _GA21-16406S: https://www.isvavai.cz/cep?s=jednoduche-vyhledavani&ss=detail&h=GA21-16406S
+.. _GF22-00863K: https://www.isvavai.cz/cep?s=jednoduche-vyhledavani&ss=detail&n=0&h=GF22-00863K

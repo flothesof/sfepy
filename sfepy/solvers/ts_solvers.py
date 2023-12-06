@@ -1,14 +1,16 @@
 """
 Time stepping solvers.
 """
-from __future__ import absolute_import
+from inspect import signature
+from functools import partial
 import numpy as nm
 
 from sfepy.base.base import (get_default, output, assert_,
                              Struct, IndexedStruct)
 from sfepy.base.timing import Timer
 from sfepy.linalg.utils import output_array_stats
-from sfepy.solvers.solvers import TimeSteppingSolver
+from sfepy.solvers.solvers import TimeSteppingSolver, NonlinearSolver
+from sfepy.solvers.ls import RMMSolver
 from sfepy.solvers.ts_controllers import FixedTSC
 from sfepy.solvers.ts import TimeStepper, VariableTimeStepper
 
@@ -69,11 +71,11 @@ class StationarySolver(TimeSteppingSolver):
 
         vec0 = init_fun(ts, vec0)
 
-        prestep_fun(ts, vec0)
+        vec0 = prestep_fun(ts, vec0)
 
         vec = nls(vec0)
 
-        poststep_fun(ts, vec)
+        vec = poststep_fun(ts, vec)
 
         return vec
 
@@ -140,11 +142,11 @@ class SimpleTimeSteppingSolver(TimeSteppingSolver):
 
         self.output_step_info(ts)
         if ts.step == 0:
-            prestep_fun(ts, vec0)
+            vec0 = prestep_fun(ts, vec0)
 
             vec = self.solve_step0(nls, vec0)
 
-            poststep_fun(ts, vec)
+            vec = poststep_fun(ts, vec)
             ts.advance()
 
         else:
@@ -153,11 +155,11 @@ class SimpleTimeSteppingSolver(TimeSteppingSolver):
         for step, time in ts.iter_from(ts.step):
             self.output_step_info(ts)
 
-            prestep_fun(ts, vec)
+            vec = prestep_fun(ts, vec)
 
             vect = self.solve_step(ts, nls, vec, prestep_fun)
 
-            poststep_fun(ts, vect)
+            vect = poststep_fun(ts, vect)
 
             vec = vect
 
@@ -312,7 +314,7 @@ class AdaptiveTimeSteppingSolver(SimpleTimeSteppingSolver):
             if is_break:
                 break
 
-            prestep_fun(ts, vec)
+            vec = prestep_fun(ts, vec)
 
         return vect
 
@@ -324,16 +326,150 @@ class AdaptiveTimeSteppingSolver(SimpleTimeSteppingSolver):
 #
 # Elastodynamics solvers.
 #
-def gen_multi_vec_packing(size, num):
-    assert_((size % num) == 0)
-    ii = size // num
+def transform_equations_ed(equations, materials):
+    """
+    Transform equations and variables for :class:`ElastodynamicsBaseTS`-based
+    time stepping solvers. The displacement variable name is automatically
+    detected by seeking the second time derivative, i.e. the 'dd' prefix in
+    variable names.
+    """
+    from sfepy.terms.terms import Terms, Term
+    from sfepy.discrete.variables import FieldVariable
+    from sfepy.discrete.equations import Equations, Equation
 
-    def unpack(vec):
-        return [vec[ir:ir+ii] for ir in range(0, size, ii)]
+    eq_mass = []
+    eq_damping = []
+    eq_other = []
+    new_var_primary = set()
+    variables = equations.variables
+    for eq in equations:
+        for term in eq.terms:
+            for name in term.names.state:
+                der = term.arg_derivatives[name]
+                if ((der is not None) and
+                    isinstance(der, int) and
+                    (der > 0)):
+                    new_var_primary.add(name)
+                    if der == 2:
+                        eq_mass.append(term)
+
+                    else:
+                        eq_damping.append(term)
+
+                else:
+                    eq_other.append(term)
+
+                continue
+
+    assert len(new_var_primary) == 1
+    uname = new_var_primary.pop()
+    vname = variables[uname].dual_var_name
+    duname = 'd' + uname
+    dduname = 'dd' + uname
+    dvname = 'd' + vname
+    ddvname = 'dd' + vname
+    new_variables = variables.copy()
+    if new_variables[uname]._order is None:
+        raise ValueError('state variable orders have to be specified when using'
+                         ' auto_transform_equations!')
+    num = len(new_variables.state)
+    new_variables.extend([
+        FieldVariable(duname, 'unknown', variables[uname].field, order=num),
+        FieldVariable(dduname, 'unknown', variables[uname].field, order=num + 1),
+        FieldVariable(dvname, 'test', variables[uname].field,
+                      primary_var_name=duname),
+        FieldVariable(ddvname, 'test', variables[uname].field,
+                      primary_var_name=dduname),
+    ])
+    for it, term in enumerate(eq_mass.copy()):
+        aux = ','.join([ii.strip() for ii in term.arg_str.split(',')])
+        arg_str = aux.replace(f',{vname},', f',{ddvname},')
+        new_term = term.__class__(term.name, arg_str, term.integral, term.region)
+        new_term.setup(allow_derivatives=False)
+        new_term.assign_args(new_variables, materials, user=None)
+
+
+        eq_mass[it] = new_term
+
+    for it, term in enumerate(eq_damping.copy()):
+        aux = ','.join([ii.strip() for ii in term.arg_str.split(',')])
+        arg_str = aux.replace(f',{vname},', f',{dvname},')
+        new_term = term.__class__(term.name, arg_str, term.integral, term.region)
+        new_term.setup(allow_derivatives=False)
+        new_term.assign_args(new_variables, materials, user=None)
+
+
+        eq_damping[it] = new_term
+
+    if not len(eq_damping):
+        mterm = eq_mass[0]
+        # Dummy damping to introduce du, could use a single cell region?
+        dterm = Term.new(
+            f'dw_zero({dvname}, {duname})', mterm.integral, mterm.region,
+            **{dvname : new_variables[dvname],
+               duname : new_variables[duname]},
+        )
+        dterm.setup(allow_derivatives=False)
+        dterm.assign_args(new_variables, materials, user=None)
+        eq_damping = [dterm]
+
+    new_equations = Equations([Equation('M', Terms(eq_mass), setup=False),
+                               Equation('C', Terms(eq_damping), setup=False),
+                               Equation('K', Terms(eq_other), setup=False),])
+
+    var_names = {
+        'u' : uname, 'du' : duname, 'ddu' : dduname,
+        'extra' : set(equations.variables.di.var_names)
+        - set([uname, duname, dduname])
+    }
+    return new_equations, var_names
+
+def gen_multi_vec_packing(di, names, extra_variables=False):
+    """
+    Return DOF vector (un)packing functions for nlst. For multiphysical
+    problems (non-empty `ie` slice for extra variables) the `unpack()` function
+    accepts an additional argument `mode` that can be set to 'full' or 'nls'.
+
+    The following DOF ordering must be obeyed:
+
+    - The full DOF vector:
+
+      | ``---iue---|-iv-|-ia-``
+      | ``-iu-|-ie-|``
+    """
+    iu = di.indx[names['u']]
+    iv = di.indx[names['du']]
+    ia = di.indx[names['ddu']]
+    ie = slice(iu.stop, iv.start)
+    iue = slice(0, iv.start)
+    assert_(iu.stop == di.n_dof[names['u']])
+    assert_(iv.start == ie.stop)
+    assert_(ia.start == iv.stop)
+
+    if not extra_variables:
+        assert_(ie.stop == ie.start)
+        n_arg = 3
+
+        def unpack(vec, mode=None):
+            return vec[iu], vec[iv], vec[ia]
+
+    else:
+        n_arg = 4
+
+        def unpack(vec, mode='full'):
+            if mode == 'nls':
+                return vec[iu], vec[ie]
+
+            else:
+                return vec[iu], vec[ie], vec[iv], vec[ia]
 
     def pack(*args):
         return nm.concatenate(args)
 
+    indices = dict(indices=(iue, iu, ie, iv, ia),
+                   n_dof=di.n_dof_total, n_uedof=ie.stop, n_arg=n_arg)
+    unpack.__dict__.update(indices)
+    pack.__dict__.update(indices)
     return unpack, pack
 
 def _cache(obj, attr, dep):
@@ -358,10 +494,29 @@ class ElastodynamicsBaseTS(TimeSteppingSolver):
 
     Assumes block-diagonal matrix in `u`, `v`, `a`.
     """
+
+    _common_parameters = [
+        ('t0', 'float', 0.0, False,
+         'The initial time.'),
+        ('t1', 'float', 1.0, False,
+         'The final time.'),
+        ('dt', 'float', None, False,
+         'The time step. Used if `n_step` is not given.'),
+        ('n_step', 'int', 10, False,
+         'The number of time steps. Has precedence over `dt`.'),
+        ('is_linear', 'bool', False, False,
+         'If True, the problem is considered to be linear.'),
+        ('var_names', 'dict', None, False,
+         """The mapping of variables with keys 'u', 'du', 'ddu' and 'extra',
+            and values corresponding to the names of the actual variables.
+            See `var_names` returned from :func:`transform_equations_ed()`"""),
+    ]
+
     def __init__(self, conf, nls=None, tsc=None, context=None, **kwargs):
         TimeSteppingSolver.__init__(self, conf, nls=nls, tsc=tsc,
                                     context=context, **kwargs)
         self.conf.quasistatic = False
+
         if self.tsc is None:
             self.tsc = FixedTSC({})
 
@@ -381,19 +536,28 @@ class ElastodynamicsBaseTS(TimeSteppingSolver):
         self.constant_matrices = None
         self.matrix = None
 
-    def get_matrices(self, nls, vec):
+    def get_matrices(self, nls, vec, unpack=None):
         if self.conf.is_linear and self.constant_matrices is not None:
             out = self.constant_matrices
 
         else:
             aux = nls.fun_grad(vec)
 
-            assert_((len(vec) % 3) == 0)
-            i3 = len(vec) // 3
+            if unpack is not None:
+                iue, iu, ie, iv, ia = unpack.indices
+                aux = nls.fun_grad(vec)
 
-            K = aux[:i3, :i3]
-            C = aux[i3:2*i3, i3:2*i3]
-            M = aux[2*i3:, 2*i3:]
+                M = aux[ia, ia]
+                C = aux[iv, iv]
+                K = aux[iue, iue]
+
+            else:
+                assert_((len(vec) % 3) == 0)
+                i3 = len(vec) // 3
+
+                K = aux[:i3, :i3]
+                C = aux[i3:2*i3, i3:2*i3]
+                M = aux[2*i3:, 2*i3:]
 
             out = (M, C, K)
 
@@ -405,37 +569,55 @@ class ElastodynamicsBaseTS(TimeSteppingSolver):
 
         return out
 
-    def get_a0(self, nls, u0, v0):
-        vec = nm.r_[u0, v0, nm.zeros_like(u0)]
+    def get_a0(self, nls, u0, e0, v0, unpack):
+        iue, iu, ie, iv, ia = unpack.indices
 
+        vec = nm.r_[u0, e0, v0, nm.zeros_like(v0)]
         aux = nls.fun(vec)
-        i3 = len(u0)
-        r = aux[:i3] + aux[i3:2*i3] + aux[2*i3:]
+        r = aux[iu] + aux[iv] + aux[ia]
 
-        M = self.get_matrices(nls, vec)[0]
+        M = self.get_matrices(nls, vec, unpack)[0][iu, iu]
         a0 = nls.lin_solver(-r, mtx=M)
         nls.lin_solver.clear()
         output_array_stats(a0, 'initial acceleration', verbose=self.verbose)
         return a0
 
     def get_initial_vec(self, nls, vec0, init_fun, prestep_fun, poststep_fun):
+        if not set(self.conf.var_names.keys()).issuperset(['ddu', 'du', 'u']):
+            raise ValueError(
+                "var_names have to contain 'u', 'du', 'ddu' keys!"
+            )
+
+        unpack, pack = gen_multi_vec_packing(
+            self.di, self.conf.var_names,
+            extra_variables=self.get('extra_variables', False),
+        )
+        self.unpack = unpack
+        self.pack = pack
+
         ts = self.ts
         vec0 = init_fun(ts, vec0)
-
-        unpack, pack = gen_multi_vec_packing(len(vec0), 3)
 
         output(self.format % (ts.time, ts.step + 1, ts.n_step),
                verbose=self.verbose)
         if ts.step == 0:
-            prestep_fun(ts, vec0)
-            u0, v0, _ = unpack(vec0)
+            vec0 = prestep_fun(ts, vec0)
+            if unpack.n_arg == 4:
+                u0, e0, v0, _ = unpack(vec0)
 
-            ut = u0
-            vt = v0
-            at = self.get_a0(nls, u0, v0)
+            else:
+                u0, v0, _ = unpack(vec0)
+                e0 = nm.empty(0, dtype=u0.dtype)
 
-            vec = pack(ut, vt, at)
-            poststep_fun(ts, vec)
+            a0 = self.get_a0(nls, u0, e0, v0, unpack)
+
+            if unpack.n_arg == 4:
+                vec = pack(u0, e0, v0, a0)
+
+            else:
+                vec = pack(u0, v0, a0)
+
+            vec = poststep_fun(ts, vec)
             ts.advance()
 
         else:
@@ -443,13 +625,23 @@ class ElastodynamicsBaseTS(TimeSteppingSolver):
 
         return vec, unpack, pack
 
-    def clear_lin_solver(self):
+    def clear_lin_solver(self, clear_constant_matrices=True):
         self.nls.lin_solver.clear()
         self.matrix = None
+        if clear_constant_matrices:
+            self.constant_matrices = None
 
     @standard_ts_call
     def __call__(self, vec0=None, nls=None, init_fun=None, prestep_fun=None,
                  poststep_fun=None, status=None, **kwargs):
+        sig = signature(init_fun)
+        if len(sig.parameters) == 3:
+            init_fun = partial(init_fun, self)
+
+        sig = signature(poststep_fun)
+        if len(sig.parameters) == 3:
+            poststep_fun = partial(poststep_fun, self)
+
         vec, unpack, pack = self.get_initial_vec(
             nls, vec0, init_fun, prestep_fun, poststep_fun)
 
@@ -465,9 +657,11 @@ class ElastodynamicsBaseTS(TimeSteppingSolver):
             # adaptivity modifies dt and time.
             while 1:
                 # Previous step state q(t_n).
-                # TODO: EBCs for current time t_{n+1}. but loads should be
-                # applied in the mid-step time t_{n+1-a}.
-                prestep_fun(ts, vec)
+                # Both prestep_fun() and poststep_fun() apply EBCs to vec/vect
+                # in case active_only is False.
+                # TODO: Generalized alpha: EBCs for current time t_{n+1}. but
+                # loads should be applied in the mid-step time t_{n+1-a}.
+                vec = prestep_fun(ts, vec)
                 vect = self.step(ts, vec, nls, pack, unpack,
                                  prestep_fun=prestep_fun)
 
@@ -479,7 +673,7 @@ class ElastodynamicsBaseTS(TimeSteppingSolver):
                 output('dt:', ts.dt, 'new dt:', new_dt, 'status:', status,
                        verbose=self.verbose)
                 if new_dt != ts.dt:
-                    self.clear_lin_solver()
+                    self.clear_lin_solver(clear_constant_matrices=False)
 
                 if status.result == 'accept':
                     break
@@ -487,7 +681,7 @@ class ElastodynamicsBaseTS(TimeSteppingSolver):
                 ts.set_time_step(new_dt, update_time=True)
 
             # Current step state q(t_{n+1}).
-            poststep_fun(ts, vect)
+            vect = poststep_fun(ts, vect)
 
             if ts.nt >= 1:
                 break
@@ -498,32 +692,29 @@ class ElastodynamicsBaseTS(TimeSteppingSolver):
 
             vec = vect
 
+        return vec
+
 class VelocityVerletTS(ElastodynamicsBaseTS):
     """
-    Solve elastodynamics problems by the velocity-Verlet method.
+    Solve elastodynamics problems by the explicit velocity-Verlet method.
 
-    The algorithm can be found in [1].
+    The algorithm can be found in [1]_.
 
-    [1] Swope, William C.; H. C. Andersen; P. H. Berens; K. R. Wilson (1
-    January 1982). "A computer simulation method for the calculation of
-    equilibrium constants for the formation of physical clusters of molecules:
-    Application to small water clusters". The Journal of Chemical Physics. 76
-    (1): 648 (Appendix). doi:10.1063/1.442716
+    It is mathematically equivalent to the :class:`CentralDifferenceTS` method.
+    The current implementation code is essentially the same, as the mid-time
+    velocities are not used for anything other than computing the new time
+    velocities.
+
+    .. [1] Swope, William C.; H. C. Andersen; P. H. Berens; K. R. Wilson (1
+           January 1982). "A computer simulation method for the calculation of
+           equilibrium constants for the formation of physical clusters of
+           molecules: Application to small water clusters". The Journal of
+           Chemical Physics. 76 (1): 648 (Appendix). doi:10.1063/1.442716
     """
     name = 'ts.velocity_verlet'
 
     _parameters = [
-        ('t0', 'float', 0.0, False,
-         'The initial time.'),
-        ('t1', 'float', 1.0, False,
-         'The final time.'),
-        ('dt', 'float', None, False,
-         'The time step. Used if `n_step` is not given.'),
-        ('n_step', 'int', 10, False,
-         'The number of time steps. Has precedence over `dt`.'),
-        ('is_linear', 'bool', False, False,
-         'If True, the problem is considered to be linear.'),
-    ]
+    ] + ElastodynamicsBaseTS._common_parameters
 
     def create_nlst(self, nls, dt, u0, v0, a0):
         vm = v0 + 0.5 * dt * a0
@@ -571,6 +762,122 @@ class VelocityVerletTS(ElastodynamicsBaseTS):
 
         return vect
 
+class CentralDifferenceTS(ElastodynamicsBaseTS):
+    r"""
+    Solve elastodynamics problems by the explicit central difference method.
+
+    It is the same method as obtained by using :class:`NewmarkTS` with
+    :math:`\beta = 0`, :math:`\gamma = 1/2`, but uses a simpler code.
+
+    It is also mathematically equivalent to the :class:`VelocityVerletTS`
+    method. The current implementation code is essentially the same.
+
+    This solver supports, when used with :class:`RMMSolver
+    <sfepy.solvers.ls.RMMSolver>`, the reciprocal mass matrix algorithm, see
+    :class:`MassTerm <sfepy.terms.terms_mass.MassTerm>`.
+    """
+    name = 'ts.central_difference'
+
+    _parameters = [
+    ] + ElastodynamicsBaseTS._common_parameters
+
+    def _create_nlst_a(self, nls, dt, ufun, vfun, cc, cache_name, is_rmm=False):
+        nlst = nls.copy()
+
+        if is_rmm:
+            def fun(at):
+                ut = ufun()
+                zz = nm.zeros_like(ut)
+                vec = nm.r_[ut, zz, zz]
+
+                aux = nls.fun(vec)
+
+                i3 = len(at)
+                rt = aux[:i3]
+                return rt
+
+            @_cache(self, cache_name, self.conf.is_linear)
+            def fun_grad(at):
+                M = self.get_matrices(nls, None)[0]
+
+                return M
+
+        else:
+            def fun(at):
+                vec = nm.r_[ufun(), vfun(at), at]
+
+                aux = nls.fun(vec)
+
+                i3 = len(at)
+                rt = aux[:i3] + aux[i3:2*i3] + aux[2*i3:]
+                return rt
+
+            @_cache(self, cache_name, self.conf.is_linear)
+            def fun_grad(at):
+                vec = (None if self.conf.is_linear
+                       else nm.r_[ufun(), vfun(at), at])
+                M, C = self.get_matrices(nls, vec)[:2]
+
+                Kt = M + cc * C
+                return Kt
+
+        nlst.fun = fun
+        nlst.fun_grad = fun_grad
+        nlst.u = ufun
+        nlst.v = vfun
+
+        return nlst
+
+    def create_nlst(self, nls, dt, u0, v0, a0):
+        dt2 = dt**2
+
+        def v(a):
+            return v0 + dt * 0.5 * (a0 + a)
+
+        def u():
+            return u0 + dt * v0 + dt2 * 0.5 * a0
+
+        if isinstance(nls.lin_solver, RMMSolver):
+            import scipy.sparse as sps
+            class NoNLS(NonlinearSolver):
+
+                def __call__(self, vec_x0, conf=None, fun=None, fun_grad=None,
+                             lin_solver=None, iter_hook=None, status=None):
+                    vec_r = self.fun(vec_x0)
+                    # Dummy all-zero matrix to make standard_call() happy.
+                    mtx_a = sps.csr_matrix((vec_r.shape[0], vec_r.shape[0]))
+                    return self.lin_solver(-vec_r, mtx=mtx_a)
+
+            nlst = self._create_nlst_a(nls, dt, u, v, 0.5 * dt, 'matrix',
+                                       is_rmm=True)
+            nlst = NoNLS(Struct(name='nonls', kind='nls.nonls'),
+                         fun=nlst.fun, fun_grad=nlst.fun_grad,
+                         lin_solver=nlst.lin_solver, iter_hook=nlst.iter_hook,
+                         status=nlst.status, context=nlst.context,
+                         u=nlst.u, v=nlst.v)
+            # nlst.lin_solver.a0 = a0
+
+        else:
+            nlst = self._create_nlst_a(nls, dt, u, v, 0.5 * dt, 'matrix')
+
+        return nlst
+
+    def step(self, ts, vec, nls, pack, unpack, **kwargs):
+        """
+        Solve a single time step.
+        """
+        dt = ts.dt
+        ut, vt, at = unpack(vec)
+
+        nlst = self.create_nlst(nls, dt, ut, vt, at)
+        atp = nlst(at)
+        vtp = nlst.v(atp)
+        utp = nlst.u()
+
+        vect = pack(utp, vtp, atp)
+
+        return vect
+
 class NewmarkTS(ElastodynamicsBaseTS):
     r"""
     Solve elastodynamics problems by the Newmark method.
@@ -594,60 +901,79 @@ class NewmarkTS(ElastodynamicsBaseTS):
     [2] Arnaud Delaplace, David Ryckelynck: Solvers for Computational Mechanics
     """
     name = 'ts.newmark'
+    extra_variables = True
 
     _parameters = [
-        ('t0', 'float', 0.0, False,
-         'The initial time.'),
-        ('t1', 'float', 1.0, False,
-         'The final time.'),
-        ('dt', 'float', None, False,
-         'The time step. Used if `n_step` is not given.'),
-        ('n_step', 'int', 10, False,
-         'The number of time steps. Has precedence over `dt`.'),
-        ('is_linear', 'bool', False, False,
-         'If True, the problem is considered to be linear.'),
         ('beta', 'float', 0.25, False, 'The Newmark method parameter beta.'),
         ('gamma', 'float', 0.5, False, 'The Newmark method parameter gamma.'),
-    ]
+    ] + ElastodynamicsBaseTS._common_parameters
 
-    def _create_nlst_a(self, nls, dt, ufun, vfun, cc, ck, cache_name):
-        nlst = nls.copy()
-
-        def fun(at):
-            vec = nm.r_[ufun(at), vfun(at), at]
-
-            aux = nls.fun(vec)
-
-            i3 = len(at)
-            rt = aux[:i3] + aux[i3:2*i3] + aux[2*i3:]
-            return rt
-
-        @_cache(self, cache_name, self.conf.is_linear)
-        def fun_grad(at):
-            vec = None if self.conf.is_linear else nm.r_[ufun(at), vfun(at), at]
-            M, C, K = self.get_matrices(nls, vec)
-
-            Kt = M + cc * C + ck * K
-            return Kt
-
-        nlst.fun = fun
-        nlst.fun_grad = fun_grad
-        nlst.u = ufun
-        nlst.v = vfun
-
-        return nlst
-
-    def create_nlst(self, nls, dt, gamma, beta, u0, v0, a0):
+    def create_nlst(self, nls, dt, gamma, beta, u0, e0, v0, a0, pack, unpack):
         dt2 = dt**2
+        iue, iu, ie, iv, ia = pack.indices
+
+        cc0 = (1.0 - gamma) * dt
+        cc = gamma * dt
+        ck0 = (0.5 - beta) * dt2
+        ck = beta * dt2
 
         def v(a):
-            return v0 + dt * ((1.0 - gamma) * a0 + gamma * a)
+            return v0 + cc0 * a0 + cc * a
 
         def u(a):
-            return u0 + dt * v0 + dt2 * ((0.5 - beta) * a0 + beta * a)
+            return u0 + dt * v0 + ck0 * a0 + ck * a
 
-        nlst = self._create_nlst_a(nls, dt, u, v, gamma * dt, beta * dt2,
-                                   'matrix')
+        if iue == iu:
+            def fun(at):
+                vec = nm.r_[u(at), v(at), at]
+
+                aux = nls.fun(vec)
+
+                rt = aux[iu] + aux[iv] + aux[ia]
+                return rt
+
+            @_cache(self, 'matrix', self.conf.is_linear)
+            def fun_grad(at):
+                vec = None if self.conf.is_linear else nm.r_[u(at), v(at), at]
+                M, C, K = self.get_matrices(nls, vec, unpack)
+
+                Kt = M + cc * C + ck * K
+                return Kt
+
+        else: # Extra variables present.
+            def fun(aet):
+                at = aet[iu]
+                vec = nm.r_[u(at), aet[ie], v(at), at]
+
+                aux = nls.fun(vec)
+
+                rt = nm.empty(pack.n_uedof, aux.dtype)
+                rt[iu] = aux[iu] + aux[iv] + aux[ia]
+                rt[ie] = aux[ie]
+                return rt
+
+            @_cache(self, 'matrix', self.conf.is_linear)
+            def fun_grad(aet):
+                if self.conf.is_linear:
+                    vec = None
+
+                else:
+                    at = aet[iu]
+                    vec = nm.r_[u(at), aet[ie], v(at), at]
+
+                M, C, K = self.get_matrices(nls, vec, unpack)
+
+                Kt = K.copy()
+                Kt[:, iu] *= ck
+                Kt[iu, iu] += M + cc * C
+                return Kt
+
+        nlst = nls.copy()
+        nlst.fun = fun
+        nlst.fun_grad = fun_grad
+        nlst.u = u
+        nlst.v = v
+
         return nlst
 
     def step(self, ts, vec, nls, pack, unpack, **kwargs):
@@ -656,15 +982,16 @@ class NewmarkTS(ElastodynamicsBaseTS):
         """
         dt = ts.dt
         conf = self.conf
-        ut, vt, at = unpack(vec)
+        ut, et, vt, at = unpack(vec)
+        nlst = self.create_nlst(nls, dt, conf.gamma, conf.beta, ut, et, vt, at,
+                                pack, unpack)
 
-        nlst = self.create_nlst(nls, dt, conf.gamma, conf.beta, ut, vt, at)
-        atp = nlst(at)
+        aetp = nlst(pack(at, et))
+        atp, etp = unpack(aetp, mode='nls')
         vtp = nlst.v(atp)
         utp = nlst.u(atp)
 
-        vect = pack(utp, vtp, atp)
-
+        vect = pack(utp, etp, vtp, atp)
         return vect
 
 class GeneralizedAlphaTS(ElastodynamicsBaseTS):
@@ -697,16 +1024,6 @@ class GeneralizedAlphaTS(ElastodynamicsBaseTS):
     name = 'ts.generalized_alpha'
 
     _parameters = [
-        ('t0', 'float', 0.0, False,
-         'The initial time.'),
-        ('t1', 'float', 1.0, False,
-         'The final time.'),
-        ('dt', 'float', None, False,
-         'The time step. Used if `n_step` is not given.'),
-        ('n_step', 'int', 10, False,
-         'The number of time steps. Has precedence over `dt`.'),
-        ('is_linear', 'bool', False, False,
-         'If True, the problem is considered to be linear.'),
         ('rho_inf', 'float', 0.5, False,
          """The spectral radius in the high frequency limit (user specified
             high-frequency dissipation) in [0, 1]:
@@ -719,7 +1036,7 @@ class GeneralizedAlphaTS(ElastodynamicsBaseTS):
          r'The Newmark-like parameter :math:`\beta`.'),
         ('gamma', 'float', None, False,
          r'The Newmark-like parameter :math:`\gamma`.'),
-    ]
+    ] + ElastodynamicsBaseTS._common_parameters
 
     def __init__(self, conf, nls=None, tsc=None, context=None, **kwargs):
         ElastodynamicsBaseTS.__init__(self, conf, nls=nls, tsc=tsc,
@@ -833,17 +1150,7 @@ class BatheTS(ElastodynamicsBaseTS):
     name = 'ts.bathe'
 
     _parameters = [
-        ('t0', 'float', 0.0, False,
-         'The initial time.'),
-        ('t1', 'float', 1.0, False,
-         'The final time.'),
-        ('dt', 'float', None, False,
-         'The time step. Used if `n_step` is not given.'),
-        ('n_step', 'int', 10, False,
-         'The number of time steps. Has precedence over `dt`.'),
-        ('is_linear', 'bool', False, False,
-         'If True, the problem is considered to be linear.'),
-    ]
+    ] + ElastodynamicsBaseTS._common_parameters
 
     def __init__(self, conf, nls=None, context=None, **kwargs):
         ElastodynamicsBaseTS.__init__(self, conf, nls=nls, context=context,
@@ -927,11 +1234,12 @@ class BatheTS(ElastodynamicsBaseTS):
         nlst.lin_solver = self.ls2
         return nlst
 
-    def clear_lin_solver(self):
-        self.nls.lin_solver.clear()
+    def clear_lin_solver(self, clear_constant_matrices=True):
+        ElastodynamicsBaseTS.clear_lin_solver(
+            self, clear_constant_matrices=clear_constant_matrices,
+        )
         self.ls1 = self.ls2 = None
         self.matrix1 = None
-        self.matrix = None
 
     def step(self, ts, vec, nls, pack, unpack, prestep_fun):
         """
@@ -947,7 +1255,7 @@ class BatheTS(ElastodynamicsBaseTS):
         ts.set_substep_time(0.5 * dt)
 
         vec1 = pack(ut1, vt1, at1)
-        prestep_fun(ts, vec1)
+        vec1 = prestep_fun(ts, vec1)
 
         nlst2 = self.create_nlst2(nls, dt, ut, ut1, vt, vt1)
         ut2 = nlst2(ut1)

@@ -1,8 +1,7 @@
-from sfepy.discrete.fem.fields_base import (VolumeField, SurfaceField,
-                                            H1Mixin)
+from sfepy.discrete.fem.fields_base import FEField, H1Mixin
 from sfepy.discrete.fem.fields_nodal import GlobalNodalLikeBasis
 
-class H1BernsteinVolumeField(H1Mixin, GlobalNodalLikeBasis, VolumeField):
+class H1BernsteinVolumeField(H1Mixin, GlobalNodalLikeBasis, FEField):
     family_name = 'volume_H1_bernstein'
 
     def create_basis_context(self):
@@ -15,10 +14,10 @@ class H1BernsteinVolumeField(H1Mixin, GlobalNodalLikeBasis, VolumeField):
         gps = self.gel.poly_space
         mesh = self.create_mesh(extra_nodes=False)
 
-        ctx = geo_ctx = gps.create_context(mesh.cmesh, 0, 1e-15, 100, 1e-8)
+        ctx = geo_ctx = gps.create_context(self.cmesh, 0, 1e-15, 100, 1e-8)
         ctx.geo_ctx = geo_ctx
 
         return ctx
 
-class H1BernsteinSurfaceField(H1Mixin, GlobalNodalLikeBasis, SurfaceField):
+class H1BernsteinSurfaceField(H1Mixin, GlobalNodalLikeBasis, FEField):
     family_name = 'surface_H1_bernstein'

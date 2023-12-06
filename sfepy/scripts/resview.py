@@ -103,6 +103,12 @@ def parse_options(opts, separator=':'):
     return out
 
 
+def make_title(filenames):
+    title = ', '.join(filenames)
+    title = title if len(title) < 80 else title[:77] + '...'
+    return title
+
+
 def make_cells_from_conn(conns, convert_to_vtk_type):
     cells, cell_type, offset = [], [], []
     _offset = 0
@@ -143,8 +149,12 @@ def make_grid_from_mesh(mesh, add_mat_id=False):
     cells, cell_type, offset = make_cells_from_conn(
         {desc: mesh.get_conn(desc)}, vtk_cell_types,
     )
+    try:
+        grid = pv.UnstructuredGrid(offset, cells, cell_type, points)
 
-    grid = pv.UnstructuredGrid(offset, cells, cell_type, points)
+    except TypeError: # Pyvista >= 0.39.0
+        grid = pv.UnstructuredGrid(cells, cell_type, points)
+
     if add_mat_id:
         add_mat_id_to_grid(grid, mesh.cmesh.cell_groups)
 
@@ -309,21 +319,23 @@ def read_mesh(filenames, step=None, print_info=True, ret_n_steps=False,
 def pv_plot(filenames, options, plotter=None, step=None,
             scalar_bar_limits=None, ret_scalar_bar_limits=False,
             step_inc=None, use_cache=True):
+    fstep = (step if step is not None else options.step)
+    if step_inc is not None:
+        fstep += step_inc
+    if fstep < 0:
+        return
+    if hasattr(plotter, 'resview_n_steps'): # Works for None as well.
+        if fstep >= plotter.resview_n_steps:
+            return
+
     plots = {}
     color = None
 
     if plotter is None:
-        plotter = pv.Plotter()
+        plotter = pv.Plotter(title=make_title(filenames))
 
-    fstep = (step if step is not None else options.step)
     if step_inc is not None:
         plotter.clear()
-        fstep += step_inc
-    if fstep < 0:
-        fstep = 0
-    if hasattr(plotter, 'resview_n_steps'):
-        if fstep >= plotter.resview_n_steps:
-            fstep = plotter.resview_n_steps - 1
 
     mesh, n_steps = read_mesh(filenames, fstep, ret_n_steps=True,
                               use_cache=use_cache)
@@ -381,8 +393,13 @@ def pv_plot(filenames, options, plotter=None, step=None,
 
             position += 1
 
-        if len(fields) == 0:
-            fields.append(('mat_id', 'p0'))
+        if (len(fields) == 0):
+            if  'mat_id' in mesh.array_names:
+                fields.append(('mat_id', 'p0'))
+
+            else:
+                fields.append(('0', 'p0'))
+
     else:
         fields = options.fields
 
@@ -409,6 +426,7 @@ def pv_plot(filenames, options, plotter=None, step=None,
                                      use_cache=use_cache)
 
         pipe = [steps[fstep].copy()]
+        pos_bnds = pipe[0].bounds
 
         if field in fields_map:  # subregion
             mat_val = fields_map[field]
@@ -438,7 +456,8 @@ def pv_plot(filenames, options, plotter=None, step=None,
         if isinstance(factor, tuple):
             ws = nm.diff(nm.reshape(pipe[-1].bounds, (-1, 2)), axis=1)
             size = ws[ws > 0.0].min()
-            fmax = nm.abs(pipe[-1][field]).max()
+            factor_field = warp if warp is not None else field
+            fmax = nm.abs(pipe[-1][factor_field]).max()
             factor = 0.01 * float(factor[1]) * size / fmax
 
         if warp:
@@ -460,15 +479,15 @@ def pv_plot(filenames, options, plotter=None, step=None,
             plot_info.append('warp=%s, factor=%.2e' % (warp, factor))
 
         position = opts.get('p', 0)  # determine plotting slot
-        bnds = pipe[-1].bounds
         if 'p' in opts:
-            size = nm.array(bnds[1::2]) - nm.array(bnds[::2])
+            size = nm.array(pos_bnds[1::2]) - nm.array(pos_bnds[::2])
+            size = nm.maximum(size, 1e-2 * size.max())
             pipe.append(pipe[-1].copy())
             pos1 = position % options.max_plots
             pos2 = position // options.max_plots
             shift = pos1 * size * nm.array(options.grid_vector1)
             shift += pos2 * size * nm.array(options.grid_vector2)
-            pipe[-1].translate(shift)
+            pipe[-1].translate(shift, inplace=True)
 
         if opts.get('l', options.outline):  # outline
             plotter.add_mesh(pipe[-1].outline(), color='k')
@@ -557,16 +576,17 @@ def pv_plot(filenames, options, plotter=None, step=None,
     if options.show_scalar_bars:
         if scalar_bar_limits is None:
             scalar_bar_limits = {}
-            for k, vs in scalar_bars.items():
-                limits = (nm.min([v[0] for v, _, _ in vs]),
-                          nm.max([v[1] for v, _, _ in vs]))
-                scalar_bar_limits[k] = limits
 
         width, height = options.scalar_bar_size
         position_x, position_y, shift_x, shift_y = options.scalar_bar_position
         nslots = len(scalar_bars)
         for k, vs in scalar_bars.items():
-            clim = scalar_bar_limits[k]
+            clim = scalar_bar_limits.get(k, (None, None))
+            if clim[0] is None:
+               clim = (nm.min([v[0] for v, _, _ in vs]), clim[1])
+            if clim[1] is None:
+               clim = (clim[0], nm.max([v[1] for v, _, _ in vs]))
+
             for _, mapper, _ in vs:
                 mapper.scalar_range = clim
             _, mapper, slot = vs[0]
@@ -606,6 +626,28 @@ def print_camera_position(plotter):
     cp = nm.array([k for k in plotter.camera_position]).ravel()
     cp = ','.join(['%g' % k for k in cp])
     print(f'--camera-position="{cp}"')
+
+
+def _get_cpos(plotter, options, camera_default=(225, 75, 0.9)):
+    """
+    Uses `plotter.bounds`, so call only after adding all meshes to the plotter.
+    """
+    if options.camera_position is not None:
+        cpos = nm.array(options.camera_position)
+        cpos = cpos.reshape((3, 3))
+    elif options.camera:
+        zoom = options.camera[2] if len(options.camera) > 2 else 1.
+        cpos = get_camera_position(plotter.bounds,
+                                   options.camera[0],
+                                   options.camera[1],
+                                   zoom=zoom)
+    elif options.view_2d:
+        cpos = None
+    else:
+        cpos = get_camera_position(plotter.bounds, camera_default[0],
+                                   camera_default[1], zoom=camera_default[2])
+
+    return cpos
 
 
 class OptsToListAction(Action):
@@ -775,7 +817,7 @@ def main():
                         help=helps['scalar_bar_position'])
     parser.add_argument('-v', '--view', metavar='position',
                         action=StoreNumberAction, dest='camera',
-                        default=[225, 75, 0.9], help=helps['view'])
+                        default=None, help=helps['view'])
     parser.add_argument('--camera-position', metavar='camera_position',
                         action=StoreNumberAction, dest='camera_position',
                         default=None, help=helps['camera_position'])
@@ -803,7 +845,8 @@ def main():
     options = parser.parse_args()
 
     pv.set_plot_theme("document")
-    plotter = pv.Plotter(off_screen=options.off_screen)
+    plotter = pv.Plotter(off_screen=options.off_screen,
+                         title=make_title(options.filenames))
 
     if options.anim_output_file:
         _, n_steps = read_mesh(options.filenames, ret_n_steps=True)
@@ -812,6 +855,7 @@ def main():
         if options.axes_visibility:
             plotter.add_axes(**dict(options.axes_options))
         for step in range(n_steps):
+            plotter.clear()
             plotter, sb_limits = pv_plot(options.filenames, options,
                                          plotter=plotter, step=step,
                                          ret_scalar_bar_limits=True)
@@ -821,18 +865,22 @@ def main():
             for k, v in sb_limits.items():
                 scalar_bar_limits[k].append(v)
 
-        if options.camera:
-            zoom = options.camera[2] if len(options.camera) > 2 else 1.
-            cpos = get_camera_position(plotter.bounds,
-                                       options.camera[0], options.camera[1],
-                                       zoom=zoom)
-            plotter.set_position(cpos[0])
-            plotter.set_focus(cpos[1])
-            plotter.set_viewup(cpos[2])
+        cpos = _get_cpos(plotter, options)
+
+        if cpos is not None:
+            plotter.camera_position = cpos
+
+        elif options.view_2d:
+            plotter.view_xy()
 
         anim_filename = options.anim_output_file
-        plotter.open_movie(anim_filename, options.framerate)
-        plotter.show(auto_close=False)
+        if anim_filename.endswith('.png'):
+            from sfepy.base.ioutils import edit_filename
+            fig_name = edit_filename(anim_filename, suffix='{step:05d}')
+
+        else:
+            fig_name = None
+            plotter.open_movie(anim_filename, options.framerate)
 
         for k in scalar_bar_limits.keys():
             lims = scalar_bar_limits[k]
@@ -848,8 +896,13 @@ def main():
             if options.axes_visibility:
                 plotter.add_axes(**dict(options.axes_options))
 
-            plotter.write_frame()
+            if fig_name is None:
+                plotter.write_frame()
 
+            else:
+                plotter.screenshot(fig_name.format(step=step), return_img=False)
+
+        plotter.show()
         plotter.close()
     else:
         plotter = pv_plot(options.filenames, options, plotter=plotter)
@@ -871,29 +924,17 @@ def main():
                                     plotter=plotter)
         )
 
+        # Does not work for meshes with no z component.
         plotter.add_key_event(
             'c', lambda: print_camera_position(plotter)
         )
 
-        if options.view_2d:
+        cpos = _get_cpos(plotter, options)
+        if (cpos is None) and options.view_2d:
             plotter.view_xy()
-            plotter.show(screenshot=options.screenshot,
-                         window_size=options.window_size)
-        else:
-            if options.camera_position is not None:
-                cpos = nm.array(options.camera_position)
-                cpos = cpos.reshape((3, 3))
-            elif options.camera:
-                zoom = options.camera[2] if len(options.camera) > 2 else 1.
-                cpos = get_camera_position(plotter.bounds,
-                                           options.camera[0],
-                                           options.camera[1],
-                                           zoom=zoom)
-            else:
-                cpos = None
 
-            plotter.show(cpos=cpos, screenshot=options.screenshot,
-                         window_size=options.window_size)
+        plotter.show(cpos=cpos, screenshot=options.screenshot,
+                     window_size=options.window_size)
 
         if options.screenshot is not None and osp.exists(options.screenshot):
             print(f'saved: {options.screenshot}')

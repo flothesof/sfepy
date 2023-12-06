@@ -70,27 +70,17 @@ class MiniAppBase(Struct):
 
         problem.set_conf_solvers(problem.conf.solvers, opts)
         problem.init_solvers()
+        problem.set_linear(self.is_linear)
 
         if self.is_linear:
-            output('linear problem, trying to presolve...')
-            timer = Timer(start=True)
+            set_presolve = True
+            for v in problem.conf.solvers.values():
+                if v.kind.startswith('ls.') and hasattr(v, 'use_presolve'):
+                    set_presolve = False
 
-            ev = problem.get_evaluator()
-
-            state = problem.create_state()
-            try:
-                mtx_a = ev.eval_tangent_matrix(state(), is_full=True)
-            except ValueError:
-                output('matrix evaluation failed, giving up...')
-                raise
-
-            problem.set_linear(True)
-            problem.try_presolve(mtx_a)
-
-            output('...done in %.2f s' % timer.stop())
-
-        else:
-            problem.set_linear(False)
+            ls_conf = problem.get_solver().nls.lin_solver.conf
+            if set_presolve and hasattr(ls_conf, 'use_presolve'):
+                ls_conf.use_presolve = True
 
     def _get_volume(self, volume):
         if isinstance(volume, dict):
@@ -1161,11 +1151,12 @@ class CoefExprPar(MiniAppBase):
             equations, variables = \
               problem.create_evaluable(expression, term_mode=term_mode)
 
-            if isinstance(self.set_variables, list):
-                self.set_variables_default(variables, ir, self.set_variables,
-                                           data)
-            else:
-                self.set_variables(variables, ir, **data)
+            if hasattr(self, 'set_variables'):
+                if isinstance(self.set_variables, list):
+                    self.set_variables_default(variables, ir,
+                                               self.set_variables, data)
+                else:
+                    self.set_variables(variables, ir, **data)
 
             val = eval_equations(equations, variables,
                                  term_mode=term_mode)

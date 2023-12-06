@@ -69,7 +69,7 @@ def setup_extra_data(conn_info):
         for var in info.all_vars:
             field = var.get_field()
             if var == info.primary:
-                field.setup_extra_data(info.ps_tg, info, info.is_trace)
+                field.setup_extra_data(info)
 
 def fields_from_conf(conf, regions):
     fields = {}
@@ -221,9 +221,9 @@ class Field(Struct):
 
         Returns
         -------
-        geo : CMapping instance
+        geo : PyCMapping instance
             The reference mapping.
-        mapping : VolumeMapping or SurfaceMapping instance
+        mapping : FEMapping or IGMapping instance
             The mapping.
         key : tuple
             The key of the mapping in `mappings` or `mappings0`.
@@ -388,7 +388,7 @@ class Field(Struct):
         Returns
         -------
         vals : array
-            The interpolated values with shape ``(n_coor, n_components)`` or
+            The interpolated values with shape ``(n_coor, n_components, 1)`` or
             gradients with shape ``(n_coor, n_components, dim)`` according to
             the `mode`. If `ret_status` is False, the values where the status
             is greater than one are set to ``numpy.nan``.
@@ -434,19 +434,20 @@ class Field(Struct):
             cmode = 1
 
         ctx = self.create_basis_context()
+        econn = self.get_econn(('cell', self.region.tdim), self.region)
 
         if source_vals.dtype in complex_types:
             valsi = vals.copy()
             evaluate_in_rc(vals, ref_coors, cells, status,
                            nm.ascontiguousarray(source_vals.real),
-                           self.get_econn('volume', self.region), cmode, ctx)
+                           econn, cmode, ctx)
             evaluate_in_rc(valsi, ref_coors, cells, status,
                            nm.ascontiguousarray(source_vals.imag),
-                           self.get_econn('volume', self.region), cmode, ctx)
+                           econn, cmode, ctx)
             vals = vals + valsi * 1j
         else:
             evaluate_in_rc(vals, ref_coors, cells, status, source_vals,
-                           self.get_econn('volume', self.region), cmode, ctx)
+                           econn, cmode, ctx)
 
         output('interpolation: %f s' % timer.stop(),verbose=verbose)
 

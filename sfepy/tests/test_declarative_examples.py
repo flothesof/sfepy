@@ -11,6 +11,7 @@ def inedir(filename):
 examples = [
     'acoustics/acoustics.py',
     'acoustics/acoustics3d.py',
+    'acoustics/helmholtz_apartment.py',
     'acoustics/vibro_acoustic3d.py',
     'diffusion/cube.py',
     'diffusion/darcy_flow_multicomp.py',
@@ -21,6 +22,7 @@ examples = [
     'diffusion/poisson_field_dependent_material.py',
     'diffusion/poisson_functions.py',
     'diffusion/poisson_neumann.py',
+    'diffusion/poisson_nonlinear_material.py',
     'diffusion/poisson_periodic_boundary_condition.py',
     'diffusion/sinbc.py',
     'diffusion/time_advection_diffusion.py',
@@ -44,6 +46,7 @@ examples = [
     'linear_elasticity/material_nonlinearity.py',
     'linear_elasticity/nodal_lcbcs.py',
     'linear_elasticity/prestress_fibres.py',
+    'linear_elasticity/seismic_load.py',
     'linear_elasticity/shell10x_cantilever.py',
     'linear_elasticity/two_bodies_contact.py',
     'multi_physics/biot.py',
@@ -51,6 +54,7 @@ examples = [
     'multi_physics/biot_npbc_lagrange.py',
     'multi_physics/biot_short_syntax.py',
     'multi_physics/piezo_elasticity.py',
+    'multi_physics/piezo_elastodynamic.py',
     'multi_physics/thermo_elasticity.py',
     'multi_physics/thermo_elasticity_ess.py',
     'navier_stokes/navier_stokes.py',
@@ -76,6 +80,18 @@ else:
         'linear_elasticity/linear_elastic_iga.py',
         'navier_stokes/navier_stokes2d_iga.py',
     ])
+
+try:
+    import primme
+
+except ImportError:
+    pass
+
+else:
+    examples.extend([
+        'linear_elasticity/modal_analysis_declarative.py',
+    ])
+
 
 @pytest.mark.parametrize('ex_filename', examples)
 def test_examples(ex_filename, output_dir):
