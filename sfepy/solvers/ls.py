@@ -353,14 +353,14 @@ class ScipyIterative(LinearSolver):
 
         solver_kwargs.update(prec_args)
         if conf.method == 'gmres':
-            from pkg_resources import parse_version
+            from packaging import version
             import scipy as sp
 
-            if parse_version(sp.__version__) >= parse_version('1.4.0'):
+            if version.parse(sp.__version__) >= version.parse('1.4.0'):
                 solver_kwargs.update({'callback_type' : 'legacy'})
 
         try:
-            sol, info = self.solver(mtx, rhs, x0=x0, atol=eps_a, tol=eps_r,
+            sol, info = self.solver(mtx, rhs, x0=x0, atol=eps_a, rtol=eps_r,
                                     maxiter=i_max, callback=iter_callback,
                                     **solver_kwargs)
         except TypeError:
@@ -936,6 +936,56 @@ class MUMPSParallelSolver(LinearSolver):
         out = nm.memmap(tmpfile('vals_x.array'), dtype=dtype, mode='r')
 
         return out
+
+
+class CholeskySolver(ScipyDirect):
+    """
+    Interface to scikit-sparse.cholesky solver.
+    """
+    name = 'ls.cholesky'
+
+    _parameters = [
+        ('use_presolve', 'bool', False, False,
+         'If True, pre-factorize the matrix.'),
+        ('use_mtx_digest', 'bool', True, False,
+         """If True, determine automatically a reused matrix using its
+            SHA1 digest. If False, .clear() has to be called
+            manually whenever the matrix changes - expert use only!"""),
+    ]
+
+    def __init__(self, conf, **kwargs):
+        LinearSolver.__init__(self, conf, solve=None, **kwargs)
+        self.sls = None
+
+        aux = try_imports(['from sksparse.cholmod import cholesky'],
+                          'cannot import cholesky sparse solver!')
+        if 'cholesky' in aux:
+            self.sls = aux['cholesky']
+        else:
+            raise ValueError('cholesky not available!')
+
+        self.clear()
+
+    @standard_call
+    def __call__(self, rhs, x0=None, conf=None, eps_a=None, eps_r=None,
+                 i_max=None, mtx=None, status=None, **kwargs):
+        if not conf.use_presolve:
+            self.clear()
+
+        self.presolve(mtx, use_mtx_digest=conf.use_mtx_digest)
+
+        return self.solve(rhs)
+
+    def presolve(self, mtx, use_mtx_digest=True):
+        if use_mtx_digest:
+            is_new, mtx_digest = _is_new_matrix(mtx, self.mtx_digest)
+
+        else:
+            is_new, mtx_digest = False, None
+
+        if is_new or (self.solve is None):
+            self.solve = self.sls(mtx.tocsc())
+            self.mtx_digest = mtx_digest
 
 
 class SchurMumps(MUMPSSolver):

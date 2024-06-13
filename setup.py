@@ -14,7 +14,7 @@ from setuptools import find_packages
 
 import sys
 sys.path.append('./tools')
-from build_helpers import INFO, cmdclass, log, package_check
+from build_helpers import INFO, cmdclass, logging, log, package_check
 
 from sfepy import config, version
 
@@ -66,7 +66,7 @@ def _scikit_umfpack_version(pkg_name):
             return scikits.umfpack.__version__
 
         except AttributeError:
-            return '<0.3.1'
+            return '0.0.0'
 
     except:
         return None
@@ -128,6 +128,8 @@ def check_versions(show_only=False):
                   show_only=show_only)
     package_check('primme', INFO.PRIMME_MIN_VERSION, optional=True,
                   version_getter=_primme_version, show_only=show_only)
+    package_check('oct2py', INFO.OCT2PY_MIN_VERSION, optional=True,
+                  show_only=show_only)
 
 
 def data_dir_walk(dir_name: str, prefix: str) -> list:
@@ -246,7 +248,10 @@ if __name__ == '__main__':
 
     from sfepy import Config
     site_config = Config()
-    log.info('\nUsing Python {}.'.format(site_config.python_version()))
 
-    log.info('\nRequired and optional packages found:\n')
+    logging.basicConfig(level=logging.INFO, force=True)
+
+    log.info('Using Python {}.'.format(site_config.python_version()))
+
+    log.info('Required and optional packages found:')
     check_versions(show_only=True)

@@ -487,6 +487,24 @@ custom = {
                                 -0.0245554,-0.129086,0.991329],
         },
     },
+    'linear_elasticity/multi_node_lcbcs.py': {
+        '': {
+            'fields': ['u:wu:e'],
+            'force_view_3d': True,
+            'camera_position': [0.175,0.125,0.735014,
+                                0.175,0.125,0,
+                                0,1,0],
+        },
+    },
+    'linear_elasticity/multi_point_constraints.py': {
+        '': {
+            'fields': ['u:wu:f1:p0', '1:vw:p0', 'u:gu:p0'],
+            'force_view_3d': True,
+            'camera_position': [0.0565,0.0434999,19.8951,
+                                0.0565,0.0434999,0,
+                                0,1,0],
+        },
+    },
     'linear_elasticity/seismic_load.py': {
         '': {
             'fields': ['cauchy_stress:wu:f10:p0', '1:vw:p0'],
@@ -534,6 +552,18 @@ custom = {
                                 0, 0, 1],
         },
     },
+    'linear_elasticity/wedge_mesh.py': {
+        'command': 'sfepy-run sfepy/examples/linear_elasticity/wedge_mesh.py',
+        'result': 'beam_w14.vtk',
+        'sfepy-view-options': {
+            '': {
+                'fields': ['u:wu:e:o0.5'],
+                'camera_position': [0.927482,-0.574865,0.307926,
+                                    0.372897,0.120369,-0.0347131,
+                                    -0.326236,0.19556,0.924838],
+            }
+        },
+    },
     'miscellaneous/live_plot.py': {
         'command_0': 'python3 sfepy/examples/miscellaneous/live_plot.py -o output',
         'command_1': 'python3 sfepy/scripts/plot_logs.py output/live_plot.txt -o output/live_plot.png -n',
@@ -574,7 +604,7 @@ custom = {
             'camera_position': [-0.0125588,-0.00559266,0.0117482,
                                 0.00438669,0.00487109,0.00135715,
                                 0.334487,0.333581,0.881387],
-            'color_map': 'seismic',
+            'color_map': 'inferno',
         }
     },
     'multi_physics/thermal_electric.py': {
@@ -690,6 +720,16 @@ def resview_plot(filename, filename_out, options):
 
         plotter.show(cpos=cpos, screenshot=filename_out, window_size=(800, 600))
 
+def run_resview_plot(*args):
+    """
+    A fix for the problem that calling :func:`resview_plot()` directly often
+    terminates the program.
+    """
+    from multiprocessing import Process
+
+    process = Process(target=resview_plot, args=args)
+    process.start()
+    process.join()
 
 def _omit(filename, omits, omit_dirs):
     omit = False
@@ -710,6 +750,9 @@ def _omit(filename, omits, omit_dirs):
 def ebase2fbase(ebase):
     return os.path.splitext(ebase)[0].replace(os.path.sep, '-')
 
+def _make_fig_name(fig_base, fig_filename):
+    return fig_base + '-' + os.path.basename(fig_filename)
+
 def _get_image_names(custom_options):
     for key, val in custom_options.items():
         if key.startswith('image'):
@@ -724,7 +767,8 @@ def _get_fig_filenames(ebase, images_dir):
             custom_view_options = custom_options['sfepy-view-options']
 
             for fig_filename in _get_image_names(custom_options):
-                yield os.path.join(images_dir, os.path.basename(fig_filename))
+                yield os.path.join(images_dir,
+                                   _make_fig_name(fig_base, fig_filename))
 
         else:
             custom_view_options = custom_options
@@ -756,14 +800,16 @@ def _make_sphinx_path(path, relative=False):
     return sphinx_path
 
 
-def _apply_commands(custom_options, images_dir):
+def _apply_commands(custom_options, ebase, images_dir):
     for key, val in custom_options.items():
         if key.startswith('command'):
             cmd = custom_options[key]
             subprocess.run(cmd.split()).check_returncode()
 
         if key.startswith('image'):
-            shutil.copy(val, images_dir)
+            shutil.copy(val,
+                        os.path.join(images_dir,
+                                     _make_fig_name(ebase2fbase(ebase), val)))
 
 
 def apply_view_options(views, default):
@@ -827,7 +873,8 @@ def generate_images(images_dir, examples_dir, pattern='*.py'):
                           camera=[225, 75, 1],
                           camera_position=None,
                           view_2d=False,
-                          force_view_3d=False)
+                          force_view_3d=False,
+                          show_step_time=False)
 
     ensure_path(images_dir + os.path.sep)
 
@@ -844,7 +891,7 @@ def generate_images(images_dir, examples_dir, pattern='*.py'):
         custom_options = custom.get(_ebase)
         if custom_options and 'sfepy-view-options' in custom_options:
             try:
-                _apply_commands(custom_options, images_dir)
+                _apply_commands(custom_options, ebase, images_dir)
 
                 filename = custom_options.get('result')
                 dim = custom_options.get('dim')
@@ -905,16 +952,7 @@ def generate_images(images_dir, examples_dir, pattern='*.py'):
                 disp_name = fig_filename.replace(sfepy.data_dir, '')
                 output('to "%s"...' % disp_name.lstrip(os.path.sep))
 
-                try:
-                    resview_plot(fname, fig_filename, kwargs)
-
-                except KeyboardInterrupt:
-                    raise
-
-                except Exception as exc:
-                    output(f'with plot arguments: {kwargs}')
-                    output('***** failed! *****')
-                    output(f'with {exc}')
+                run_resview_plot(fname, fig_filename, kwargs)
 
                 output('...done')
 

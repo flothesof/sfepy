@@ -316,9 +316,11 @@ class Terms(Container):
 class Term(Struct):
     name = ''
     arg_types = ()
+    arg_geometry_types = {}
     arg_shapes = {}
     diff_info = {}
     integration = 'cell'
+    integration_order = None # None = any
     geometries = ['1_2', '2_3', '2_4', '3_4', '3_8']
 
     @staticmethod
@@ -421,6 +423,13 @@ class Term(Struct):
         """
         Set the term integral.
         """
+        if self.integration_order is not None:
+            if integral.order != self.integration_order:
+                raise ValueError(
+                    f'integral order for "{self.name}" term must be'
+                    f' {self.integration_order}! (is {integral.order}'
+                    f' of integral "{integral.name}")'
+                )
         self.integral = integral
         if self.integral is not None:
             self.integral_name = self.integral.name
@@ -916,6 +925,12 @@ class Term(Struct):
             else:
                 integration = self.integration
 
+            if self.arg_geometry_types:
+                ii = self.arg_names.index(var.name)
+                agt = self.arg_geometry_types.get((self.ats[ii], self.mode))
+                if agt is not None:
+                    integration = agt.get(integration, integration)
+
             self.geometry_types[var.name] = integration, reg.tdim
 
     def setup_integration(self):
@@ -1129,6 +1144,9 @@ class Term(Struct):
 
                 elif sh == 'S':
                     return sym
+
+                elif sh == 'SD':
+                    return sym * dim
 
                 elif sh == 'N': # General number.
                     return nm.inf

@@ -1149,6 +1149,7 @@ sfepy.discrete.fem sub-package
    src/sfepy/discrete/fem/fe_surface
    src/sfepy/discrete/fem/fields_base
    src/sfepy/discrete/fem/fields_hierarchic
+   src/sfepy/discrete/fem/fields_l2
    src/sfepy/discrete/fem/fields_nodal
    src/sfepy/discrete/fem/fields_positive
    src/sfepy/discrete/fem/geometry_element
@@ -1433,6 +1434,7 @@ Tools
    :maxdepth: 2
 
    src/tools/build_helpers
+   src/tools/gen_field_table
    src/tools/gen_gallery
    src/tools/gen_legendre_simplex_base
    src/tools/gen_lobatto1d_c

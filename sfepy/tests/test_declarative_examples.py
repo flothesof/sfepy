@@ -17,6 +17,7 @@ examples = [
     'diffusion/darcy_flow_multicomp.py',
     'diffusion/laplace_1d.py',
     'diffusion/laplace_coupling_lcbcs.py',
+    'diffusion/laplace_fluid_2d.py',
     'diffusion/laplace_time_ebcs.py',
     'diffusion/poisson.py',
     'diffusion/poisson_field_dependent_material.py',
@@ -44,11 +45,17 @@ examples = [
     'linear_elasticity/linear_elastic_up.py',
     'linear_elasticity/linear_viscoelastic.py',
     'linear_elasticity/material_nonlinearity.py',
+    'linear_elasticity/mixed_mesh.py',
+    'linear_elasticity/modal_analysis_declarative.py',
+    'linear_elasticity/multi_node_lcbcs.py',
     'linear_elasticity/nodal_lcbcs.py',
     'linear_elasticity/prestress_fibres.py',
     'linear_elasticity/seismic_load.py',
     'linear_elasticity/shell10x_cantilever.py',
+    'linear_elasticity/truss_bridge3d.py',
+    'linear_elasticity/truss_bridge.py',
     'linear_elasticity/two_bodies_contact.py',
+    'linear_elasticity/wedge_mesh.py',
     'multi_physics/biot.py',
     'multi_physics/biot_npbc.py',
     'multi_physics/biot_npbc_lagrange.py',
@@ -81,18 +88,6 @@ else:
         'navier_stokes/navier_stokes2d_iga.py',
     ])
 
-try:
-    import primme
-
-except ImportError:
-    pass
-
-else:
-    examples.extend([
-        'linear_elasticity/modal_analysis_declarative.py',
-    ])
-
-
 @pytest.mark.parametrize('ex_filename', examples)
 def test_examples(ex_filename, output_dir):
     conditions = run_declaratice_example(
@@ -104,6 +99,11 @@ def test_examples(ex_filename, output_dir):
         # Special-case the first iteration, as the solver converges slowly.
         ok = (conditions[1:] == 0).all()
         ok = ok and (conditions[0] == 1)
+
+    elif ex_filename == 'large_deformation/balloon.py':
+        # Special-case the steps with a time-step reduction.
+        ok = (conditions[1] == 1)
+        ok = ok and (conditions[0] == 0) and (conditions[2:] == 0).all()
 
     else:
         ok = check_conditions(conditions)

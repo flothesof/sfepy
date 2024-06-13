@@ -312,7 +312,7 @@ def test_ed_solvers(problem, output_dir):
     # plt.show()
 
     all_iths = nm.array(
-        [[simpson(val, ths[:, 0]) for val in ths.T[1:]] for ths in all_ths]
+        [[simpson(val, x=ths[:, 0]) for val in ths.T[1:]] for ths in all_ths]
     )
 
     tst.report('status, solver: time integral of (u, v, a, e_u, e_t, e_u-e_t)')
@@ -430,11 +430,11 @@ def test_active_only(output_dir):
     conf.options.active_only = False
     pb = Problem.from_conf(conf)
     pb.tsc_conf = None
-    variables_f = pb.solve()
+    variables_f = pb.solve(save_results=False)
 
     conf.options.active_only = True
     pb = Problem.from_conf(conf)
     pb.tsc_conf = None
-    variables_t = pb.solve()
+    variables_t = pb.solve(save_results=False)
 
     assert nm.allclose(variables_f(), variables_t(), atol=1e-7, rtol=0)

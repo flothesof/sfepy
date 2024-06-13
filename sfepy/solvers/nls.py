@@ -8,10 +8,34 @@ import numpy.linalg as nla
 
 from sfepy.base.base import output, get_default, debug, Struct
 from sfepy.base.log import Log, get_logging_conf
-from sfepy.base.timing import Timer
+from sfepy.base.timing import Timer, Timers
 from sfepy.solvers.solvers import NonlinearSolver
 import six
 from six.moves import range
+
+def standard_nls_call(call):
+    """
+    Decorator handling argument preparation and timing for nonlinear solvers.
+    """
+
+    def _standard_nls_call(self, vec_x0, conf=None, fun=None, fun_grad=None,
+                           lin_solver=None, iter_hook=None, status=None,
+                           **kwargs):
+        timer = Timer(start=True)
+
+        status = get_default(status, self.status)
+        fun = get_default(fun, self.fun, 'function has to be specified!')
+        result = call(self, vec_x0, conf=conf, fun=fun, fun_grad=fun_grad,
+                      lin_solver=lin_solver, iter_hook=iter_hook,
+                      status=status, **kwargs)
+
+        elapsed = timer.stop()
+        if status is not None:
+            status['time'] = elapsed
+
+        return result
+
+    return _standard_nls_call
 
 def check_tangent_matrix(conf, vec_x0, fun, fun_grad):
     """
@@ -127,9 +151,10 @@ class Newton(NonlinearSolver):
             tolerances."""),
         ('macheps', 'float', nm.finfo(nm.float64).eps, False,
          'The float considered to be machine "zero".'),
-        ('lin_red', 'float', 1.0, False,
+        ('lin_red', 'float or None', 1.0, False,
          """The linear system solution error should be smaller than (`eps_a` *
-            `lin_red`), otherwise a warning is printed."""),
+            `lin_red`), otherwise a warning is printed. If None, the check is
+            skipped."""),
         ('lin_precision', 'float or None', None, False,
          """If not None, the linear system solution tolerances are set in each
             nonlinear iteration relative to the current residual norm by the
@@ -186,6 +211,7 @@ class Newton(NonlinearSolver):
         else:
             self.log = None
 
+    @standard_nls_call
     def __call__(self, vec_x0, conf=None, fun=None, fun_grad=None,
                  lin_solver=None, iter_hook=None, status=None):
         """
@@ -229,11 +255,15 @@ class Newton(NonlinearSolver):
         ls_eps_a, ls_eps_r = lin_solver.get_tolerance()
         eps_a = get_default(ls_eps_a, 1.0)
         eps_r = get_default(ls_eps_r, 1.0)
-        lin_red = conf.eps_a * conf.lin_red
+        if conf.lin_red is not None:
+            lin_red = conf.eps_a * conf.lin_red
 
-        timer = Timer()
-        time_stats_keys = ['residual', 'matrix', 'solve']
-        time_stats = {key : 0.0 for key in time_stats_keys}
+        else:
+            lin_red = None
+
+        timers = Timers(['residual', 'matrix', 'solve'])
+        if conf.check:
+            timers.create('check')
 
         vec_x = vec_x0.copy()
         vec_x_last = vec_x0.copy()
@@ -254,7 +284,7 @@ class Newton(NonlinearSolver):
             ls = 1.0
             vec_dx0 = vec_dx
             while 1:
-                timer.start()
+                timers.residual.start()
 
                 try:
                     vec_r = fun(vec_x)
@@ -270,7 +300,7 @@ class Newton(NonlinearSolver):
                 else:
                     ok = True
 
-                time_stats['residual'] = timer.stop()
+                timers.residual.stop()
                 if ok:
                     try:
                         err = nla.norm(vec_r)
@@ -322,19 +352,20 @@ class Newton(NonlinearSolver):
                 condition = 2
                 break
 
-            timer.start()
+            timers.matrix.start()
             if not conf.is_linear:
                 mtx_a = fun_grad(vec_x)
 
             else:
                 mtx_a = fun_grad('linear')
 
-            time_stats['matrix'] = timer.stop()
+            timers.matrix.stop()
 
             if conf.check:
-                timer.start()
+                timers.check.start()
                 wt = check_tangent_matrix(conf, vec_x, fun, fun_grad)
-                time_stats['check'] = timer.stop() - wt
+                timers.check.stop()
+                timers.check.add(-wt)
 
             if conf.lin_precision is not None:
                 if ls_eps_a is not None:
@@ -343,41 +374,52 @@ class Newton(NonlinearSolver):
                 elif ls_eps_r is not None:
                     eps_r = max(conf.lin_precision, ls_eps_r)
 
-                lin_red = max(eps_a, err * eps_r)
+                if lin_red is not None:
+                    lin_red = max(eps_a, err * eps_r)
 
             if conf.verbose:
                 output('solving linear system...')
 
-            timer.start()
+            timers.solve.start()
             vec_dx = lin_solver(vec_r, x0=vec_x,
                                 eps_a=eps_a, eps_r=eps_r, mtx=mtx_a,
                                 status=ls_status)
             ls_n_iter += ls_status['n_iter']
-            time_stats['solve'] = timer.stop()
+            timers.solve.stop()
 
             if conf.verbose:
                 output('...done')
 
-            for key in time_stats_keys:
-                output('%10s: %7.2f [s]' % (key, time_stats[key]))
+            for key, val in timers.get_dts().items():
+                output('%10s: %7.2f [s]' % (key, val))
 
-            vec_e = mtx_a * vec_dx - vec_r
-            lerr = nla.norm(vec_e)
-            if lerr > lin_red:
-                output('warning: linear system solution precision is lower')
-                output('then the value set in solver options! (err = %e < %e)'
-                       % (lerr, lin_red))
+            if lin_red is not None:
+                vec_e = mtx_a @ vec_dx - vec_r
+                lerr = nla.norm(vec_e)
+                if lerr > lin_red:
+                    output('warning: linear system solution precision is lower'
+                           ' then the value set in solver options!'
+                           ' (err = %e < %e)' % (lerr, lin_red))
 
             vec_x -= conf.step_red * vec_dx
             it += 1
 
+        time_stats = timers.get_totals()
+        ls_n_iter = ls_n_iter if ls_n_iter >= 0 else -1
         if status is not None:
             status['time_stats'] = time_stats
             status['err0'] = err0
             status['err'] = err
             status['n_iter'] = it
-            status['ls_n_iter'] = ls_n_iter if ls_n_iter >= 0 else -1
+            status['ls_n_iter'] = ls_n_iter
             status['condition'] = condition
+
+        if conf.report_status:
+            output(f'cond: {condition}, iter: {it}, ls_iter: {ls_n_iter},'
+                   f' err0: {err0:.8e}, err: {err:.8e}')
+            for key, val in time_stats.items():
+                output('%8s: %.8f [s]' % (key, val))
+            output('     sum: %.8f [s]' % sum(time_stats.values()))
 
         if conf.log.plot is not None:
             if self.log is not None:
@@ -421,6 +463,7 @@ class ScipyBroyden(NonlinearSolver):
             solver = so.broyden3
         self.solver = solver
 
+    @standard_nls_call
     def __call__(self, vec_x0, conf=None, fun=None, fun_grad=None,
                  lin_solver=None, iter_hook=None, status=None):
         if conf is not None:
@@ -450,7 +493,10 @@ class ScipyBroyden(NonlinearSolver):
         vec_x = nm.asarray(vec_x)
 
         if status is not None:
-            status['time_stats'] = timer.stop()
+            status['time_stats'] = {'solver' : timer.stop()}
+
+        if conf.report_status:
+            output('solver: %.8f [s]' % status['time_stats']['solver'])
 
         return vec_x
 
@@ -514,6 +560,7 @@ class PETScNonlinearSolver(NonlinearSolver):
                                  ksp_converged_reasons=ksp_converged_reasons,
                                  **kwargs)
 
+    @standard_nls_call
     def __call__(self, vec_x0, conf=None, fun=None, fun_grad=None,
                  lin_solver=None, iter_hook=None, status=None,
                  pmtx=None, prhs=None, comm=None):
@@ -560,7 +607,7 @@ class PETScNonlinearSolver(NonlinearSolver):
         snes.solve(prhs.duplicate(), psol)
 
         if status is not None:
-            status['time_stats'] = timer.stop()
+            status['time_stats'] = {'solver' : timer.stop()}
 
         if snes.reason in self.converged_reasons:
             reason = 'snes: %s' % self.converged_reasons[snes.reason]
@@ -579,6 +626,9 @@ class PETScNonlinearSolver(NonlinearSolver):
                verbose=conf.verbose)
 
         converged = snes.reason >= 0
+        condition = 0 if converged else -1
+        n_iter = snes.getLinearSolveIterations()
+        ls_n_iter = snes.getLinearSolveIterations()
 
         if not converged:
             # PETSc does not update the solution if KSP have not converged.
@@ -599,9 +649,14 @@ class PETScNonlinearSolver(NonlinearSolver):
         if status is not None:
             status['err0'] = err0
             status['err'] = err
-            status['n_iter'] = snes.getIterationNumber()
-            status['ls_n_iter'] = snes.getLinearSolveIterations()
-            status['condition'] = 0 if converged else -1
+            status['n_iter'] = n_iter
+            status['ls_n_iter'] = ls_n_iter
+            status['condition'] = condition
+
+        if conf.report_status:
+            output(f'cond: {condition}, iter: {n_iter}, ls_iter: {ls_n_iter},'
+                   f' err0: {err0:.8e}, err: {err:.8e}')
+            output('solver: %.8f [s]' % status['time_stats']['solver'])
 
         if isinstance(vec_x0, self.petsc.Vec):
             sol = psol

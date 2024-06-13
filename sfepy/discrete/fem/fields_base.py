@@ -29,6 +29,36 @@ from sfepy.discrete.integrals import Integral
 from sfepy.discrete.fem.linearizer import (get_eval_dofs, get_eval_coors,
                                            create_output)
 
+def _find_geometry(region):
+    cmesh = region.cmesh
+    if region.kind == 'cell':
+        ct = cmesh.cell_types
+        for _gel in region.domain.geom_els.values():
+            if (ct[region.cells] == cmesh.key_to_index[_gel.name]).all():
+                gel = _gel
+                break
+        else:
+            raise ValueError(f'region {region.name} of contains multiple'
+                             ' reference geometries!')
+
+        is_surface = False
+
+    elif region.kind == 'facet':
+        for _gel in region.domain.geom_els.values():
+            gel = _gel.surface_facet
+            break
+
+        if gel is None:
+            raise ValueError('cells with no surface!')
+
+        is_surface = True
+
+    else:
+        raise ValueError('cannot find geometry element for region'
+                         f' {region.name} of kind {region.kind}, '
+                         f'"region.kind" must be "cell" or "facet"!')
+
+    return gel, is_surface
 
 def set_mesh_coors(domain, fields, coors, update_fields=False, actual=False,
                    clear_all=True, extra_dofs=False):
@@ -247,9 +277,10 @@ class FEField(Field):
         Struct.__init__(self, name=name, dtype=dtype, shape=shape,
                         region=region)
         self.domain = self.region.domain
+        self.cmesh = self.region.cmesh
 
         self._set_approx_order(approx_order)
-        self._setup_geometry()
+        self.gel, self.is_surface = _find_geometry(self.region)
         self._setup_kind()
         self._setup_shape()
 
@@ -276,40 +307,6 @@ class FEField(Field):
         else:
             self.approx_order = approx_order
             self.force_bubble = False
-
-    def _setup_geometry(self):
-        """
-        Setup the field region geometry.
-        """
-        region = self.region
-        cmesh = region.cmesh
-        if region.kind == 'cell':
-            ct = cmesh.cell_types
-            for gel in self.domain.geom_els.values():
-                if (ct[region.cells] == cmesh.key_to_index[gel.name]).all():
-                    self.gel = gel
-                    self.cmesh = cmesh
-                    break
-            else:
-                raise ValueError('region %s of field %s contains multiple'
-                                 ' reference geometries!'
-                                 % (self.region.name, self.name))
-
-            self.is_surface = False
-
-        elif region.kind == 'facet':
-            for gel in self.domain.geom_els.values():
-                self.gel = gel.surface_facet
-                break
-
-            if self.gel is None:
-                raise ValueError('cells with no surface!')
-
-            self.is_surface = True
-        else:
-            raise ValueError(f'unsuitable region {region.name} with kind '
-                             f'{region.kind} for field {self.name}, '
-                             f'"region.kind" must be "cell" or "facet"!')
 
     def _create_interpolant(self):
         name = '%s_%s_%s_%d%s' % (self.gel.name, self.space,
@@ -572,7 +569,7 @@ class FEField(Field):
 
     def get_dofs_in_region(self, region, merge=True):
         """
-        Return indices of DOFs that belong to the given region and group.
+        Return indices of DOFs that belong to the given region.
         """
         node_desc = self.node_desc
 
@@ -618,16 +615,24 @@ class FEField(Field):
 
     def get_qp(self, key, integral):
         """
-        Get quadrature points and weights corresponding to the given key
-        and integral. The key is 'v' or 's#', where # is the number of
-        face vertices.
+        Get quadrature points and weights corresponding to the given key and
+        integral. The key is 'v', 's#' or 'b#', where # is the number of face
+        vertices. For 'b#', the quadrature must already be created by calling
+        :func:`FEField.create_bqp()`, usually through
+        :func:`FEField.create_mapping()`.
         """
         qpkey = (integral.order, key)
 
         if qpkey not in self.qp_coors:
+            if key[0] == 'b':
+                raise ValueError(f'the quadrature "{qpkey}" does not exist!')
+
             if (key[0] == 's') and not self.is_surface:
                 dim = self.gel.dim - 1
-                n_fp = self.gel.surface_facet.n_vertex
+                if isinstance(self.gel.surface_facet, dict):
+                    n_fp = int(key[1:])
+                else:
+                    n_fp = self.gel.surface_facet.n_vertex
                 geometry = '%d_%d' % (dim, n_fp)
 
             else:
@@ -759,6 +764,24 @@ class FEField(Field):
 
             vals = _interp_to_faces(coors, bf_s, faces)
             self.qp_coors[bqpkey] = Struct(name='BQP_%s' % sd.bkey,
+                                           vals=vals, weights=qp.weights)
+
+    def create_bqp_key(self, integral, bkey):
+        gel = self.gel
+        sd_bkey, face_type = f'b{bkey}', f's{bkey}'
+
+        bqpkey = (integral.order, sd_bkey)
+        if bqpkey not in self.qp_coors:
+            qp = self.get_qp(face_type, integral)
+
+            ps_s = self.gel.surface_facet[bkey].poly_space
+            bf_s = ps_s.eval_base(qp.vals)
+
+            coors, faces = gel.coors, gel.get_surface_entities()
+
+            vals = _interp_to_faces(coors, bf_s,
+                                    faces[:, :bf_s.shape[-1]])
+            self.qp_coors[bqpkey] = Struct(name=f'BQP_{sd_bkey}',
                                            vals=vals, weights=qp.weights)
 
     def extend_dofs(self, dofs, fill_value=None):
@@ -1137,7 +1160,7 @@ class FEField(Field):
             conn = self.extra_data[f'pd_{region.name}']
 
         else:
-            raise NotImplementedError('connectivity type %s' % ct)
+            raise ValueError(f'unknown integration type! ({integration})')
 
         return conn
 
@@ -1249,30 +1272,92 @@ class FEField(Field):
             mapping = FEMapping(coors, conn, poly_space=geo_ps)
 
             if not self.is_surface:
-                self.create_bqp(region.name, integral)
-                qp = self.qp_coors[(integral.order, esd.bkey)]
+                if isinstance(ps.geometry.surface_facet, dict):
+                    if integration == 'facet_extra':
+                        msg = ('facet integration not supported for '
+                               f'element type {self.gel.name}!')
+                        raise ValueError(msg)
 
-                abf = ps.eval_base(qp.vals[0], transform=transform)
-                bf = abf[..., self.efaces[0]]
+                    nfc, dim = self.gel.n_face, self.gel.coors.shape[1]
+                    bkeys = list(ps.geometry.surface_facet.keys())
+                    for bkey in bkeys:
+                        self.create_bqp_key(integral, bkey)
 
-                indx = self.gel.get_surface_entities()[0]
-                # Fix geometry element's 1st facet orientation for gradients.
-                indx = nm.roll(indx, -1)[::-1]
-                mapping.set_basis_indices(indx)
+                    nqp = nm.max([integral.qps[f'{dim - 1}_{bkey}'].n_point
+                                  for bkey in bkeys])
 
-                if integration == 'facet_extra':
-                    se_bf_bg = geo_ps.eval_base(qp.vals, diff=True)
-                    se_bf_bg = se_bf_bg[sd.fis[:, 1]]
-                    se_ebf_bg = self.get_base(esd.bkey, 1, integral)
-                    se_ebf_bg = se_ebf_bg[sd.fis[:, 1]]
-                    remap = prepare_remap(cells, cells.max() + 1)
-                    se_conn = dconn[remap[sd.fis[:, 0]], :]
+                    flag = ''.join(str(k) for k in bkeys)
+                    qp = Struct(
+                        name=f'BQP_b{flag}',
+                        vals=nm.zeros((nfc, nqp, dim), dtype=nm.float64),
+                        weights=nm.zeros((nfc, nqp), dtype=nm.float64)
+                    )
+
+                    efc_map = nm.count_nonzero(
+                        nm.diff(nm.sort(self.gel.faces)), axis=1) + 1
+                    indxs = {}
+                    fcaxes = {}
+                    ffcidxs = []
+                    fc_map = efc_map[sd.fis[:, 1]] * (-1)
+                    for ikey, bkey in enumerate(bkeys):
+                        idx = efc_map == bkey
+                        qp0 = self.qp_coors[(integral.order, f'b{bkey}')]
+                        nqp0 = qp0.vals.shape[1]
+                        qp.vals[idx, :nqp0, :] = qp0.vals[idx]
+                        qp.weights[idx, :nqp0] = qp0.weights
+                        if qp0.weights.shape[0] < qp.weights.shape[1]:
+                            qp.weights[idx, qp0.weights.shape[0]:] = 0
+
+                        ffcidx = nm.where(efc_map == bkey)[0][0]
+                        ffcidxs.append(ffcidx)
+                        indx = self.efaces[ffcidx]
+                        indx = nm.roll(indx[:bkey], -1)[::-1]
+                        indxs[ikey] = indx
+
+                        fcco = ps.geometry.coors[indx]
+                        fcax = [nm.where((fcco[1] - fcco[0]) == 1)[0][0],
+                                nm.where((fcco[-1] - fcco[0]) == 1)[0][0]]
+                        fcaxes[ikey] = fcax
+
+                        fc_map[fc_map == -bkey] = ikey
+
+                    abf = ps.eval_base(qp.vals, transform=transform)
+                    bf = nm.zeros((nfc, nqp, 1, max(bkeys)), dtype=nm.float64)
+                    for ifc, efc in enumerate(self.efaces):
+                        bkey = efc_map[ifc]
+                        bf[ifc, ..., :bkey] = abf[ifc, ...][..., efc[:bkey]]
+
+                    mapping.set_basis_indices(indxs)
+                    weights = nm.ascontiguousarray(qp.weights[ffcidxs][fc_map])
+                    bf = nm.ascontiguousarray(bf[ffcidxs][fc_map])
+                    out = mapping.get_mapping(qp.vals[ffcidxs], weights, bf,
+                                              extra=(None, None, None),
+                                              is_face=True,
+                                              fc_bf_map=(fc_map, fcaxes))
                 else:
-                    se_bf_bg, se_ebf_bg, se_conn = None, None, None
+                    self.create_bqp(region.name, integral)
+                    qp = self.qp_coors[(integral.order, esd.bkey)]
 
-                out = mapping.get_mapping(qp.vals[0], qp.weights, bf,
-                                          extra=(se_conn, se_bf_bg, se_ebf_bg),
-                                          is_face=True)
+                    abf = ps.eval_base(qp.vals[0], transform=transform)
+                    bf = abf[..., self.efaces[0]]
+
+                    indx = self.gel.get_surface_entities()[0]
+                    # Fix geometry element's 1st facet orientation for gradients.
+                    indx = nm.roll(indx, -1)[::-1]
+                    mapping.set_basis_indices(indx)
+
+                    if integration == 'facet_extra':
+                        se_bf_bg = geo_ps.eval_base(qp.vals, diff=True)
+                        se_bf_bg = se_bf_bg[sd.fis[:, 1]]
+                        se_ebf_bg = self.get_base(esd.bkey, 1, integral)
+                        se_ebf_bg = se_ebf_bg[sd.fis[:, 1]]
+                        remap = prepare_remap(cells, cells.max() + 1)
+                        se_conn = dconn[remap[sd.fis[:, 0]], :]
+                    else:
+                        se_bf_bg, se_ebf_bg, se_conn = None, None, None
+
+                    out = mapping.get_mapping(qp.vals[0], qp.weights, bf,
+                        extra=(se_conn, se_bf_bg, se_ebf_bg), is_face=True)
 
             else:
                 # Do not use BQP for surface fields.

@@ -1,5 +1,445 @@
 # created: 20.07.2007 (-1)
 
+.. _2023.4-2024.1:
+
+from 2023.4 to 2024.1
+=====================
+
+- merge pull request #1056 from rc/l2-constant-field
+
+  - fix docstring of FEField.get_dofs_in_region()
+  - fix FEField.get_econn() error message
+  - replace FEField._setup_geometry() by new _find_geometry() - update
+    .__init__()
+  - new sfepy/discrete/fem/fields_l2.py
+
+    - new L2ConstantVolumeField, .__init__(), ._create_interpolant(),
+      .setup_extra_data(), .get_coor(), .get_econn(), .get_data_shape(),
+      .get_dofs_in_region(), .create_mapping(), .create_output()
+    - new L2ConstantSurfaceField
+
+  - update Field.from_conf()
+  - update ExpressionArg.get_bf()
+  - update L2ConstantVolumeField.__init__(), .get_econn()
+  - update balloon.py example to optionally use L2 constant field - update
+    plot_radius(), define()
+  - fix ExpressionArg.get_dofs() for argument time derivatives
+  - new L2ConstantVolumeField.get_base()
+  - fix SurfaceFluxOperatorTerm.get_fargs()
+  - fix L2ConstantVolumeField.create_mapping() for volume field + surface
+    integral
+  - fix ExpressionArg.get_bf() for single cell meshes
+  - new has_time_derivatives solver option of ElastodynamicsBaseTS - update
+    ._common_parameters, .__call__()
+  - simplify ProblemConf.get_function()
+  - update piezo_elastodynamic.py example to use L2 constant field
+
+    - new plot_voltage()
+    - update post_process(), define()
+
+  - gen_gallery.py: update custom view for piezo_elastodynamic.py example
+  - fix FEField.get_qp() for boundary QP requests
+  - re-fix SurfaceFluxOperatorTerm.get_fargs() for different state and virtual
+    fields
+  - docs: sync module index of developer guide with current sources
+
+- merge pull request #1057 from rc/update-fields-docs
+
+  - new tools/gen_field_table.py - new typeset_field_table(), typeset(),
+    gen_field_table(), setup(), main()
+  - docs: document all field configuration options in users guide
+  - add gen_field_table.py to sphinx extensions in doc/conf.py
+  - docs: add field table to users guide
+  - clean up whitespace in sfepy/discrete/dg/fields.py
+  - add/update docstrings of fields for field table
+  - docs: explain field table columns in users guide
+  - gen_field_table.py: update typeset_field_table()
+
+- merge pull request #1059 from fix-read-probe-results
+
+  - fix read_results()
+
+- merge pull request #1060 from rc/update-mesh-info
+
+  - update create_bnf() to allow '-' in vertex set names
+  - show_mesh_info.py: print vertex and cell groups in show_mesh_info()
+  - show_mesh_info.py: print data stats in show_mesh_info()
+
+- merge pull request #1061 from rc/fix-hyperelasticity-in-subdomains
+
+  - fix HyperElasticFamilyData.__call__() for subdomain integrals
+
+- merge pull request #1062 from rc/docs-update-support
+
+  - docs: update support
+
+- merge pull request #1063 from rc/passive-exp-tl-fibres-term
+
+  - new FibresExponentialTLTerm (dw_tl_fib_e) - new .get_fargs(),
+    .stress_function(), .tan_mod_function(), .get_eval_shape()
+
+- merge pull request #1064 from rc/update-mechanics-tensors
+
+  - new StressTransform.get_1pk_from_2pk()
+  - update docstring of StressTransform.get_cauchy_from_2pk()
+  - use numpy.linalg.det() directly in  StressTransform.__init__()
+
+- merge pull request #1065 from rc/hyperelasticity-on-facet-regions
+
+  - fix dw_he_rtm() for facet_extra integration
+  - new Term.arg_geometry_types attribute to allow per-variable integration
+
+    - update Term.setup_geometry_types() - geometry type can be overridden per
+      variable/mode for each integration
+
+  - set .arg_geometry_types in TL/UL terms with scalar variables - update
+    BulkPressureTLTerm, VolumeTLTerm, BulkPressureULTerm, VolumeULTerm,
+    CompressibilityULTerm
+  - add facet_extra integration to HyperElasticBase
+  - add facet_extra integration to DeformationGradientTerm, update .get_fargs()
+
+- merge pull request #1067 from vlukes/fix_elastic_terms
+
+  - fix order of arguments
+
+- merge pull request #1067 from vlukes/update_esdlinearelasticterm
+
+  - update ESDLinearElasticTerm for non-symmetric material tensor
+
+- merge pull request #1068 from rc/fix-deprecation-warnings
+
+  - fix deprecation warnings in ScalarDotGradIScalarTerm, GenYeohTLTerm
+  - fix deprecation warning in ETermBase.get_eval_shape()
+  - use recommended jax.config import
+  - fix deprecation warnings in test_compose_sparse()
+
+- merge pull request #1069 from rc/report-solver-status
+
+  - new report_status parameter of Solver
+  - report status in Newton.__call__()
+  - report status in ScipyBroyden.__call__()
+  - report status in PETScNonlinearSolver.__call__()
+  - new IndexedStruct.setdefault() for dict compatibility
+  - new standard_nls_call() decorator - apply it to .__call__() of Newton,
+    ScipyBroyden, PETScNonlinearSolver
+  - patch poststep_fun() in standard_ts_call() to collect nls time stats
+  - report nls time stats in Problem.solve()
+  - new Timer.add()
+  - new Timers - new .__init__(), .create(), .start(), .stop(), .get_dts(),
+    .get_totals()
+  - tweak time stats reports of ScipyBroyden, PETScNonlinearSolver
+  - fix time stats totals report in Newton.__call__() by using Timers
+  - fix AdaptiveTimeSteppingSolver.solve_step() to use nls.status
+  - update define() of balloon.py example to report nls status
+  - replace patched poststep_fun() by _TimingNLS in standard_ts_call()
+
+    - nls time stats collected after every nls call
+    - fixes total nls time stats for adaptive time-stepping
+
+  - special-case balloon.py example in test_examples()
+  - test_install.py: update main() for changed output
+
+- merge pull request #1071 from rc/fix-multilinear-terms-cell-basis
+
+  - fix cell dependent basis detection in ExpressionArg.get_bf()
+
+- merge pull request #1073 from vlukes/fix-mixed_mesh-example
+
+  - move meshes from '2d' to '3d', fix format
+
+- merge pull request #1050 from vlukes/wedge_elements
+
+  - new wedge finite element
+  - new PolySpace for wedge element
+  - remove forgotten comment
+  - remove trailing whitespace
+  - fix wedge quadrature
+  - fix quadrature points for 3_6 element
+  - clean-up in LagrangeWedgePolySpace._eval_base()
+  - update facet mapping for wedge elements (tri and quad facets)
+  - fix FEMapping.get_physical_qps() for wedge elements
+  - fix FEField.get_qp()
+  - new linear elastic example: test wedge elements
+  - add wedge elements example to tests
+  - update wedge quadrature rules
+  - fix wedge surface integration for higher quadratures
+  - update example: set integration order to '2'
+  - remove 'six' dependency
+  - add forgotten comma
+  - update example docstring
+  - fix quadrature rule and quadrature tests
+  - example: update docstring and remove obsolete import
+  - fix docstring
+
+- merge pull request #1070 from vlukes/report-step-stats
+
+  - report status of nonlinear steps
+  - fix nls stats in ossen solver
+  - print step info only if `report_status` is True
+  - log time_stats and step_stats into a file
+  - move log_file handle to status structure
+  - fix deprecation warning: np.sum(generator)
+  - use fixed formatting of step stats in Problem.solve()
+  - move report_status and log_status to global options
+  - update hyperela. example: switch on nls report and log
+  - fix previous wrong deletion
+  - change log file suffix: .txt -> .csv
+  - move 'verbose' argument to the last position
+
+- merge pull request #1075 from rc/skip-lin-precision-check
+
+  - skip linear system precision check in Newton.__call__() if lin_red is None
+  - update solver settings in balloon.py example
+  - update test_examples()
+
+- merge pull request #1076 from rc/update-test-install
+
+  - test_install.py: update main() for changed output
+    - remove checks of examples already tested by test_declarative_examples.py
+
+- merge pull request #1074 from rc/visualize-probes
+
+  - new parse_vector(), parse_scalar()
+  - parse probe parameters in read_header() - new .parse_report() of probes -
+    update PointsProbe, LineProbe, RayProbe, CircleProbe
+  - new ensure3d(), read_probes_as_annotations()
+  - resview.py: new --probes option, update pv_plot(), main() to show probes
+  - support probe labels in read_probes_as_annotations(), pv_plot()
+  - resview.py: new --no-probe-labels option in main()
+
+- merge pull request #1078 from rc/resview-show-time
+
+  - update read_mesh() to return time
+  - update pv_plot() to show step, time and filename (if multiple) as text
+  - cache actual step in read_mesh(), read .h5 steps on demand, update
+    pv_plot()
+  - resview.py: new --no-step-time option in main(), update pv_plot()
+
+- merge pull request #1082 from vlukes/update-evp-app
+
+  - update EVPSolverApp.save_results(): force set_state() to apply LCBCs
+
+- merge pull request #1083 from vlukes/matcoefs-orthotropic
+
+  - new function for stiffness of an orthotropic material
+  - fix spelling
+  - rename mat. function to 'stiffness_from_yps_ortho3'
+
+- merge pull request #1084 from rc/fix-project-link
+
+  - web: fix project link
+
+- merge pull request #1085 from vlukes/multi-node-combination-lcbc
+
+  - new LCBC operator: NodalCombinationXOperator
+  - fix error message
+  - place NodalCombinationXOperator class in front of LCBCOperators
+  - fix make_global_operator() and finalize() for shared dofs
+  - remove six
+  - remove __future__ import
+  - update: constraints can be generated by dof_map_fun function
+  - rename oprerator and add docstring
+  - fix operator matrix values
+  - new example for 'multi_node_combination' lcbc
+  - add multi-node-combination BC to tests
+  - fix docstring of MultiNodeLCOperator()
+  - fix missing "=" in the math expression of MultiNodeLCOperator()
+
+- merge pull request #1089 from vlukes/fix-dw_vm_dot_s-term
+
+  - fix VectorDotScalarTerm term for fmode=2
+
+- merge pull request #1092 from rc/update-gallery-custom-views
+
+  - gen_gallery.py: fix missing pv_plot() option in generate_images()
+  - gen_gallery.py: add custom view for wedge_mesh.py example
+  - gen_gallery.py: add custom view for multi_node_lcbcs.py example
+
+.. _2023.3-2023.4:
+
+from 2023.3 to 2023.4
+=====================
+
+- merge pull request #1029 from rc/fix-modal-analysis-declarative-docstring
+
+  - fix docstring of modal_analysis_declarative.py example
+
+- merge pull request #1030 from rc/clean-up-poisson-nonlinear-material
+
+  - remove superfluous declarations from poisson_nonlinear_material.py example
+
+- merge pull request #1031 from rc/gen-gallery-pattern-option
+
+  - gen_gallery.py: new --pattern option - update generate_images(),
+    generate_rst_files(), main()
+
+- merge pull request #1027 from vlukes/new_structural_elements
+
+  - simplify ConnInfo, remove dof_conn_type structure
+  - merge FEField.surface_data and FEField.point_data into FEField.extra_data
+  - update arguments of FEField.setup_extra_data()
+  - allow 1_2 cells in 2D and 3D
+  - new LinearSpringTerm, LinearTrussTerm and LinearTrussInternalForceTerm
+  - new region extra opt. 'finalize': to avoid region.finalize() call
+  - add missing tdim argument in domain.get_conn() calls
+  - new 2D example: truss bridge
+  - new 3D example with solid and structural elements
+  - new meshes: 2D and 3D bridges
+  - update term tests: do not test truss and spring terms
+  - add custom views to the gallery generator
+
+- merge pull request #1032 from rc/sem
+
+  - new _get_table(), update PolySpace.any_from_args()
+  - new register_poly_space()
+  - new get_lgl_nodes(), eval_lagrange1d_basis(), SEMTensorProductPolySpace
+  - new H1SEMVolumeField, H1SEMSurfaceField
+  - test SEM basis in test_poly_spaces.py - update _gen_common_data(),
+    test_partition_of_unity(), test_continuity()
+  - new sfepy/examples/miscellaneous/refine_evp.py
+
+- merge pull request #1034 from rc/resview-fix-plot-positions
+
+  - resview.py: fix different positions of single slot plots in pv_plot()
+
+- merge pull request #1033 from vlukes/multi_tdim_problem
+
+  - update field.get_econn() argument and function calls
+  - remove Term.dof_conn_info, update ConnInfo and Term.geometry_types
+  - fix 'volume' integration to 'cell'
+  - simplify ConnInfo.get_region_name()
+  - remove FEField.get_connectivity()
+  - update ConnInfo struct: remove unused arttibutes v_tg, ps_tg
+  - update ConnInfo: dof_conn_type replaced by dof_conn_types list
+  - update regions: create a new cmesh with a lower dim. form the region
+  - rename region extra option: 'tdim' -> 'mesh_dim'
+  - update vector fields: num. of components according to region.cmesh.tdim
+  - update mappings: new coor. transformation to lower dimensions
+  - update vibro-acoustic example: 'ls.cm_pb' solver is no more needed
+  - rename variable in Equations.get_graph_conns(): cpname -> cname
+  - explicit precedense of operators in the conditions
+  - fix docstring of FEField.get_econn()
+  - update example: rearrange the code into define(), 'ls.scipy_direct' ->
+    'ls.auto_direct'
+  - fix IGField.setup_extra_data(): wrong info.dof_conn_types handling
+  - fix Variable.evaluate(): swop region/mirror region
+  - update FESurface class: make meconn, mleconn dicts for various mirror
+    regions
+  - update Field.get_econn(): get connectivity for FEPhantomSurface
+  - fix mirror region connectivity
+
+- merge pull request #1037 from vlukes/fix_broken_examples, closes #1035
+
+  - fix nonlinear homogenization example: follow changes in PR #1033
+  - fix for issue #1035: new attribute field_dim in Region class
+  - nonlinear_homogenization example: fix the previous fix
+
+- merge pull request #1038 from vlukes/fix_field_base_create_mesh
+
+  - fix FEField.create_mesh()
+
+- merge pull request #1039 from vlukes/fix_create_basis_context
+
+  - fix H1NodalMixin.create_basis_context()
+
+- merge pull request #1036 from rc/gallery-add-interactive-examples - closes
+  #371, #905, #942
+
+  - gen_gallery.py: support script/interactive examples
+
+    - commands can be defined in custom views dict
+    - new _get_image_names(), _apply_commands()
+    - update _get_fig_filenames(), generate_images(), generate_rst_files()
+
+  - gen_gallery.py: report failed interactive examples in generate_images()
+
+    - update _apply_commands() to use subprocess.run(), raise exception on
+      error
+
+  - gen_gallery.py: add custom view commands for interactive examples - update
+    omit_images
+  - fix LogPlotter.apply_commands() for matplotlib >= 3.6.0
+  - fix probe_results() in time_poisson_interactive.py example
+  - gen_yeoh_tl_up_interactive.py: new --no-show option, update docstring
+  - hyperelastic_tl_up_interactive.py: new --no-show option, update docstring
+  - add basic docstring to linear_elastic_interactive.py example
+  - clean up post_process() in linear_elastic_probes.py example
+  - update docstring of shell10x_cantilever.py example
+  - shell10x_cantilever_interactive.py: new --no-show option, update docstring
+  - live_plot.py: new --output-dir, --plot-log options, add docstring
+  - use clip transform in band_gaps_rigid.py example for nicer plots
+  - gen_gallery.py: fix acoustics/vibro_acoustic3d.py custom view
+  - gen_gallery.py: fix generate_gallery() for no images
+  - gen_gallery.py: add custom view commands for two homogenization examples
+
+    - support linear_homogenization.py, perfusion_micro.py
+    - update omit_images
+
+  - update docstring of linear_homogenization.py example
+  - update docstring of perfusion_micro.py example
+  - add basic docstring to linear_elastic_mM.py example
+  - gen_gallery.py: new --no-thumbnails option, update main()
+  - gen_gallery.py: fix generate_images() for any separator
+  - fix docs build without petsc4py, mpi4py
+  - gen_gallery.py: allow plot failures in generate_images()
+  - gen_gallery.py: allow import failures in generate_rst_files()
+  - gen_gallery.py: update custom views of 1D results
+  - gen_gallery.py: clean up custom views
+  - resview.py: ensure nonzero plot shifts in pv_plot() for all axes
+  - gen_gallery.py: fix result name for its2D_4.py example custom view
+  - gen_gallery.py: fix commands of dispersion_analysis.py example custom view
+  - remove debug code in print_camera_position()
+
+- merge pull request #1042 from vlukes/fix_integer_division
+
+  - fix ccontres.pyx: replace floating-point divisin by integer division
+
+- merge pull request #1044 from rc/print-ccore-exceptions
+
+  - print exception message in errclear()
+
+- merge pull request #1045 from vlukes/multi_cell_mesh
+
+  - fix element orientation function
+  - update Domain.create_region(): borrow vertices from another region
+  - update FEDomain.get_conn()
+  - remove DofInfo.ptr, ptr[-1] replaced by DofInfo.n_dof_total
+  - update eq. mapping to be able to share dofs between variables
+  - fix surface connectivity
+  - fix FEField.create_mapping() for surface regions
+  - new example: a beam consisting of hexa and tetra elements
+  - fix FEField.create_mapping(): connectivity for 'surface_extra' integration
+  - use fem.utils.prepare_remap()
+  - fix example docstring
+
+- merge pull request #1047 from rc/fix-probes-write-results
+
+  - fix write_results()
+  - fix Field.evaluate_at() docstring
+
+- merge pull request #1049 from flothesof/patch-1
+
+  - better eigenvalue solver for modal_analysis_declarative.py
+  - Update docstring numerical values
+
+- merge pull request #1051 from rc/fix-docs
+
+  - fix comment in define() of refine_evp.py example
+  - docs: fix command in primer
+  - gen_gallery.py: prefix custom images to prevent name clashes
+
+    - new _make_fig_name()
+    - update _get_fig_filenames(), _apply_commands(), generate_images()
+
+  - gen_gallery.py: new run_resview_plot(), update generate_images()
+
+- merge pull request #1052 from rc/jax-he-tl-terms-proof-of-concept
+
+  - new NeoHookeanTLADTerm (dw_tl_he_neohook_ad)
+  - new OgdenTLADTerm (dw_tl_he_ogden_ad) (WIP)
+  - do not test dw_tl_he_ogden_ad in test_term_call_modes() - singular matrix
+    for zero displacements
+
 .. _2023.2-2023.3:
 
 from 2023.2 to 2023.3

@@ -61,13 +61,14 @@ class HyperElasticFamilyData(Struct):
                                             get_saved=True)
 
             vec = state(step=step, derivative=derivative)
+            econn = state.field.get_econn('cell', region)
 
             st_shape = state.get_data_shape(integral, geometry_type[0],
                                             region.name)
             data = self.init_data_struct(st_shape)
 
             fargs = tuple([getattr(data, k) for k in self.data_names])
-            fargs = fargs + (vec, vg, state.field.econn)
+            fargs = fargs + (vec, vg, econn)
             fargs = Term.translate_fargs_mapping(self.family_function,
                                                  list(fargs))
 
@@ -98,6 +99,7 @@ class HyperElasticBase(Term):
     arg_types = ('material', 'virtual', 'state')
     arg_shapes = {'material' : '1, 1', 'virtual' : ('D', 'state'),
                   'state' : 'D'}
+    integration = ('cell', 'facet_extra')
 
     @staticmethod
     def integrate(out, val_qp, vg, fmode):
@@ -225,6 +227,7 @@ class DeformationGradientTerm(Term):
     name = 'ev_def_grad'
     arg_types = ('parameter',)
     arg_shapes = {'parameter' : 'D'}
+    integration = ('cell', 'facet_extra')
 
     @staticmethod
     def function(out, vec, vg, econn, term_mode, fmode):
@@ -251,8 +254,10 @@ class DeformationGradientTerm(Term):
         vec = self.get_vector(parameter)
 
         fmode = {'eval' : 0, 'el_avg' : 1, 'qp' : 2}.get(mode, 1)
-
-        return vec, vg, parameter.field.econn, term_mode, fmode
+        econn = parameter.field.get_econn(
+            self.get_dof_conn_type(self.arg_names[0]), self.region
+        )
+        return vec, vg, econn, term_mode, fmode
 
     def get_eval_shape(self, parameter,
                        mode=None, term_mode=None, diff_var=None, **kwargs):

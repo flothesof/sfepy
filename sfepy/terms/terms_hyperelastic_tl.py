@@ -155,7 +155,7 @@ class GenYeohTLTerm(HyperElasticTLBase):
         n_cells, n_qps, _, _ = out.shape
         for cell in range(n_cells):
             for qp in range(n_qps):
-                _inv_c = inv_c[cell, qp]
+                _inv_c = inv_c[cell, qp, :, 0]
                 _c_inv = nm.array([
                     [_inv_c[0], _inv_c[3], _inv_c[4]],
                     [_inv_c[3], _inv_c[1], _inv_c[5]],
@@ -447,6 +447,7 @@ class BulkPressureTLTerm(HyperElasticTLBase):
     """
     name = 'dw_tl_bulk_pressure'
     arg_types = ('virtual', 'state', 'state_p')
+    arg_geometry_types = {('state_p', None) : {'facet_extra' : 'facet'}}
     arg_shapes = {'virtual' : ('D', 'state'), 'state' : 'D', 'state_p' : 1}
     family_data_names = ['det_f', 'sym_inv_c']
 
@@ -561,6 +562,7 @@ class VolumeTLTerm(HyperElasticTLBase):
     """
     name = 'dw_tl_volume'
     arg_types = ('virtual', 'state')
+    arg_geometry_types = {('virtual', None) : {'facet_extra' : 'facet'}}
     arg_shapes = {'virtual' : (1, None), 'state' : 'D'}
     family_data_names = ['mtx_f', 'det_f', 'sym_inv_c']
 

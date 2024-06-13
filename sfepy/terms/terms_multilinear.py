@@ -14,7 +14,7 @@ except ImportError:
     oe = None
 
 try:
-    from jax.config import config
+    from jax import config
     config.update("jax_enable_x64", True)
     import jax
     import jax.numpy as jnp
@@ -128,6 +128,10 @@ def get_einsum_ops(eargs, ebuilder, expr_cache):
                 ag, _ = arg.term.get_mapping(arg.arg)
                 op = ag.det[..., 0, 0]
 
+            elif val_name == 'ivol':
+                ag, _ = arg.term.get_mapping(arg.arg)
+                op = 1.0 / ag.volume[:, 0, 0, 0]
+
             elif val_name == 'I':
                 op = ebuilder.make_eye(arg.n_components)
 
@@ -205,11 +209,13 @@ class ExpressionArg(Struct):
     def get_dofs(self, cache, expr_cache, oname):
         if self.kind != 'state': return
 
-        key = (self.name, self.term.region.name)
+        key = (self.name, self.term.region.name,
+               self.term.arg_derivatives[self.name])
         dofs = cache.get(key)
         if dofs is None:
             arg = self.arg
-            dofs_vec = self.arg().reshape((-1, arg.n_components))
+            dofs_vec = self.arg(derivative=key[-1])
+            dofs_vec = dofs_vec.reshape((-1, arg.n_components))
             # # axis 0: cells, axis 1: node, axis 2: component
             # dofs = dofs_vec[conn]
             # axis 0: cells, axis 1: component, axis 2: node
@@ -229,17 +235,29 @@ class ExpressionArg(Struct):
 
     def get_bf(self, expr_cache):
         ag, _ = self.term.get_mapping(self.arg)
+        cell_dependent = False
         if self.term.integration == 'facet_extra':
-            sd = self.arg.field.extra_data[f'sd_{self.term.region.name}']
-            _bf = self.arg.field.get_base(sd.bkey, 0, self.term.integral)
-            bf = _bf[sd.fis[:, 1], ...]
+            if 'L2_constant' in self.arg.field.family_name:
+                # It goes through non-cell-depending basis branch below, so fix
+                # the number of axes.
+                bf = ag.bf[None, ...]
+
+            else:
+                sd = self.arg.field.extra_data[f'sd_{self.term.region.name}']
+                _bf = self.arg.field.get_base(sd.bkey, 0, self.term.integral)
+                bf = _bf[sd.fis[:, 1], ...]
+                cell_dependent = True
 
         else:
             bf = ag.bf
 
         key = 'bf{}'.format(id(bf))
         _bf  = expr_cache.get(key)
-        if bf.shape[0] > 1: # cell-depending basis.
+
+        is_surface = 'facet' in self.term.act_integration
+        n_cells = self.term.region.get_n_cells(is_surface=is_surface)
+        if (bf.ndim == 4) and (cell_dependent or (bf.shape[0] == n_cells)):
+            # cell-depending basis.
             if _bf is None:
                 _bf = bf[:, :, 0]
                 expr_cache[key] = _bf
@@ -311,7 +329,12 @@ class ExpressionBuilder(Struct):
 
         return pvg
 
-    def add_constant(self, name, cname):
+    def add_cell_scalar(self, name, cname):
+        append_all(self.subscripts, 'c')
+        append_all(self.operand_names, '.'.join((name, cname)))
+        append_all(self.components, [])
+
+    def add_qp_scalar(self, name, cname):
         append_all(self.subscripts, 'cq')
         append_all(self.operand_names, '.'.join((name, cname)))
         append_all(self.components, [])
@@ -462,21 +485,25 @@ class ExpressionBuilder(Struct):
         append_all(self.subscripts, 'cq{}'.format(rein))
         append_all(self.operand_names, arg.name + '.arg')
 
-    def build(self, texpr, *args, diff_var=None):
+    def build(self, texpr, *args, mode=None, diff_var=None):
         eins, modifiers = parse_term_expression(texpr)
 
         # Virtual variable must be the first variable.
         # Numpy arrays cannot be compared -> use a loop.
         for iv, arg in enumerate(args):
             if arg.kind == 'virtual':
-                self.add_constant(arg.name, 'det')
+                if mode != 'qp':
+                    self.add_qp_scalar(arg.name, 'det')
                 self.add_virtual_arg(arg, iv, eins[iv], modifiers[iv])
                 break
         else:
             iv = -1
             for ip, arg in enumerate(args):
                 if arg.kind == 'state':
-                    self.add_constant(arg.name, 'det')
+                    if mode != 'qp':
+                        self.add_qp_scalar(arg.name, 'det')
+                        if mode == 'el_avg':
+                            self.add_cell_scalar(arg.name, 'ivol')
                     break
             else:
                 raise ValueError('no FieldVariable in arguments!')
@@ -502,6 +529,10 @@ class ExpressionBuilder(Struct):
                 # Lexicographic ordering of output indices, i.e.
                 # (n_comp, dim) or (dim, n_comp) <=> i.j or j.i
                 self.out_subscripts[ia] += ''.join(sorted(ifree))
+
+            if mode == 'qp':
+                self.out_subscripts[ia] = (self.out_subscripts[ia]
+                                           .replace('c', 'cq'))
 
     @staticmethod
     def join_subscripts(subscripts, out_subscripts):
@@ -779,7 +810,7 @@ class ETermBase(Term):
     def clear_cache(self):
         self.expr_cache = {}
 
-    def build_expression(self, texpr, *eargs, diff_var=None):
+    def build_expression(self, texpr, *eargs, mode=None, diff_var=None):
         timer = Timer('')
         timer.start()
 
@@ -792,13 +823,13 @@ class ETermBase(Term):
             n_add = 1
 
         ebuilder = ExpressionBuilder(n_add, self.expr_cache)
-        ebuilder.build(texpr, *eargs, diff_var=diff_var)
+        ebuilder.build(texpr, *eargs, mode=mode, diff_var=diff_var)
         if self.verbosity:
             output('build expression: {} s'.format(timer.stop()))
 
         return ebuilder
 
-    def make_function(self, texpr, *args, diff_var=None):
+    def make_function(self, texpr, *args, mode=None, diff_var=None):
         timer = Timer('')
         timer.start()
 
@@ -837,6 +868,7 @@ class ETermBase(Term):
 
         if einfo.ebuilder is None:
             einfo.ebuilder = self.build_expression(texpr, *einfo.eargs,
+                                                   mode=mode,
                                                    diff_var=diff_var)
 
         n_add = einfo.ebuilder.n_add
@@ -1159,7 +1191,7 @@ class ETermBase(Term):
         out_shape = get_output_shape(ebuilder.out_subscripts[0],
                                      ebuilder.subscripts[0], operands[0])
 
-        dtype = nm.find_common_type([op.dtype for op in operands[0]], [])
+        dtype = nm.result_type(*operands[0])
 
         return out_shape, dtype
 
@@ -1269,6 +1301,10 @@ class EDotTerm(ETermBase):
                   {'opt_material' : '1, 1', 'virtual' : ('D', 'state'),
                    'state' : 'D', 'parameter_1' : 'D', 'parameter_2' : 'D'},
                   {'opt_material' : 'D, D'},
+                  {'opt_material' : None},
+                  {'opt_material' : '1, 1', 'virtual' : ('N', 'state'),
+                   'state' : 'N', 'parameter_1' : 'N', 'parameter_2' : 'N'},
+                  {'opt_material' : 'N, N'},
                   {'opt_material' : None}]
     modes = ('weak', 'eval')
     integration = ('cell', 'facet')
@@ -1828,4 +1864,78 @@ class SurfaceFluxOperatorTerm(ETermBase):
         return self.make_function(
             'i,ij,0,0.j',
             normals, mat, var1, var2, diff_var=diff_var,
+        )
+
+class SurfacePiezoFluxOperatorTerm(ETermBase):
+    r"""
+    Surface piezoelectric flux operator term.
+
+    Corresponds to the electric flux due to mechanically induced electrical
+    displacement.
+
+    :Definition:
+
+    .. math::
+        \int_{\Gamma} q g_{kij} e_{ij}(\ul{u}) n_k \mbox{ , }
+        \int_{\Gamma} p g_{kij} e_{ij}(\ul{v}) n_k
+
+    :Arguments 1:
+        - material            : :math:`g_{kij}`
+        - virtual/parameter_1 : :math:`q`
+        - state/parameter_2   : :math:`\ul{u}`
+
+    :Arguments 2:
+        - material : :math:`g_{kij}`
+        - state    : :math:`p`
+        - virtual  : :math:`\ul{v}`
+    """
+    name = 'de_surface_piezo_flux'
+    arg_types = (('material', 'virtual', 'state'),
+                 ('material', 'state', 'virtual'),
+                 ('material', 'parameter_1', 'parameter_2'))
+    arg_shapes = [{'material' : 'D, S',
+                   'virtual/grad_state' : (1, None),
+                   'state/grad_state' : 'D',
+                   'virtual/grad_virtual' : ('D', None),
+                   'state/grad_virtual' : 1,
+                   'parameter_1': 1, 'parameter_2': 'D'}]
+    integration = 'facet_extra'
+    modes = ('grad_state', 'grad_virtual', 'eval')
+
+    def get_function(self, mat, var1, var2, mode=None, term_mode=None,
+                     diff_var=None, **kwargs):
+        normals = self.get_normals(var2)
+        return self.make_function(
+            'i,iJ,0,s(a:b)->J',
+            normals, mat, var1, var2, diff_var=diff_var,
+        )
+
+class SurfacePiezoFluxTerm(ETermBase):
+    r"""
+    Surface piezoelectric flux term.
+
+    Corresponds to the electric flux due to mechanically induced electrical
+    displacement.
+
+    :Definition:
+
+    .. math::
+        \int_{\Gamma} g_{kij} e_{ij}(\ul{u}) n_k
+
+    :Arguments 1:
+        - material  : :math:`g_{kij}`
+        - parameter : :math:`\ul{u}`
+    """
+    name = 'ev_surface_piezo_flux'
+    arg_types = ('material', 'parameter')
+    arg_shapes = {'material' : 'D, S', 'parameter': 'D'}
+    integration = 'facet_extra'
+    modes = ('eval',)
+
+    def get_function(self, mat, var1, mode=None, term_mode=None,
+                     diff_var=None, **kwargs):
+        normals = self.get_normals(var1)
+        return self.make_function(
+            'i,iJ,s(a:b)->J',
+            normals, mat, var1, diff_var=diff_var,
         )

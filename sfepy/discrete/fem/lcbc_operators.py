@@ -2,7 +2,6 @@
 Operators for enforcing linear combination boundary conditions in nodal FEM
 setting.
 """
-from __future__ import absolute_import
 import numpy as nm
 import scipy.sparse as sp
 
@@ -12,8 +11,8 @@ from sfepy.discrete.common.dof_info import DofInfo, expand_nodes_to_equations
 from sfepy.discrete.fem.utils import (compute_nodal_normals,
                                       compute_nodal_edge_dirs)
 from sfepy.discrete.conditions import get_condition_value, Function
-import six
-from six.moves import range
+from sfepy.mechanics.tensors import dim2sym
+
 
 class LCBCOperator(Struct):
     """
@@ -96,6 +95,28 @@ class MRLCBCOperator(LCBCOperator):
         self.n_mdof = self.mtx.shape[0]
         self.n_dof_new = self.mtx.shape[1]
 
+def _create_spin_matrix(coors):
+    n_nod, dim = coors.shape
+
+    if dim == 2:
+        mtx = nm.empty((n_nod, dim, 1), dtype=nm.float64)
+        mtx[:, 0, 0] = -coors[:, 1]
+        mtx[:, 1, 0] = coors[:, 0]
+
+    elif dim == 3:
+        mtx = nm.zeros((n_nod, dim, dim), dtype=nm.float64)
+        mtx[:, 0, 1] = coors[:, 2]
+        mtx[:, 0, 2] = -coors[:, 1]
+        mtx[:, 1, 0] = -coors[:, 2]
+        mtx[:, 1, 2] = coors[:, 0]
+        mtx[:, 2, 0] = coors[:, 1]
+        mtx[:, 2, 1] = -coors[:, 0]
+
+    else:
+        raise ValueError('space dimension must be 2 or 3! (is %d)' % dim)
+
+    return mtx
+
 class RigidOperator(MRLCBCOperator):
     """
     Transformation matrix operator for rigid LCBCs.
@@ -109,29 +130,10 @@ class RigidOperator(MRLCBCOperator):
 
         coors = self.field.get_coor(self.mdofs)
         n_nod, dim = coors.shape
+        n_rigid_dof = dim2sym(dim)
 
         mtx_e = nm.tile(nm.eye(dim, dtype=nm.float64), (n_nod, 1))
-
-        if dim == 2:
-            mtx_r = nm.empty((dim * n_nod, 1), dtype=nm.float64)
-            mtx_r[0::dim,0] = -coors[:,1]
-            mtx_r[1::dim,0] = coors[:,0]
-            n_rigid_dof = 3
-
-        elif dim == 3:
-            mtx_r = nm.zeros((dim * n_nod, dim), dtype=nm.float64)
-            mtx_r[0::dim,1] = coors[:,2]
-            mtx_r[0::dim,2] = -coors[:,1]
-            mtx_r[1::dim,0] = -coors[:,2]
-            mtx_r[1::dim,2] = coors[:,0]
-            mtx_r[2::dim,0] = coors[:,1]
-            mtx_r[2::dim,1] = -coors[:,0]
-            n_rigid_dof = 6
-
-        else:
-            msg = 'dimension in [2, 3]: %d' % dim
-            raise ValueError(msg)
-
+        mtx_r = _create_spin_matrix(coors).reshape((n_nod * dim, -1))
         self.mtx = nm.hstack((mtx_r, mtx_e))
 
         # Strip unconstrained dofs.
@@ -142,6 +144,176 @@ class RigidOperator(MRLCBCOperator):
         self.n_mdof = n_nod * len(self.dof_names)
         self.n_new_dof = n_rigid_dof
         self.mtx = self.mtx[indx]
+
+class Rigid2Operator(LCBCOperator):
+    r"""
+    Transformation matrix operator for rigid body multi-point constraint LCBCs.
+
+    For each dependent node :math:`i` in the first region, its DOFs
+    :math:`u^i_j` are given by the displacement :math:`\bar{u}_j` and rotation
+    :math:`r_j` in the single independent node in the second region:
+
+    .. math::
+        u^i_j = \bar{u}_j + S_{ij} r_j
+
+    where the spin matrix :math:`S_{ij}` is computed using the coordinates
+    relative to the independent node, i.e. :math:`\ul{x} - \bar{\ul{x}}`.
+    Functionally it corresponds to the RBE2 multi-point constraint in
+    MSC/Nastran.
+
+    A simplified version for fields without the rotation DOFs is also
+    supported.
+    """
+    kind = 'rigid2'
+
+    def __init__(self, name, regions, dof_names, dof_map_fun,
+                 variables, ts=None, functions=None):
+        LCBCOperator.__init__(self, name, regions, dof_names, dof_map_fun,
+                              variables, functions=functions)
+
+        mvar, svar = variables[self.var_names[0]], variables[self.var_names[1]]
+        is_rotation = mvar.n_components < svar.n_components
+        dim = mvar.dim
+        if is_rotation and dim not in (2, 3):
+            raise ValueError('space dimension must be 2 or 3! (is %d)' % dim)
+
+        mfield, sfield = mvar.field, svar.field
+        mnodes = mfield.get_dofs_in_region(regions[0], merge=True)
+        snodes = sfield.get_dofs_in_region(regions[1], merge=True)
+        if len(snodes) != 1:
+            raise ValueError('number of independent nodes must be 1! (is %d)'
+                             % len(snodes))
+
+        self.mdofs = expand_nodes_to_equations(mnodes, dof_names[0],
+                                               self.all_dof_names[0])
+        self.sdofs = expand_nodes_to_equations(snodes, dof_names[1],
+                                               self.all_dof_names[1])
+
+        meq, seq = mvar.eq_map.eq[self.mdofs], svar.eq_map.eq[self.sdofs]
+
+        assert_(nm.all(meq >= 0))
+        assert_(nm.all(seq >= 0))
+
+        mcoors = mfield.get_coor(mnodes)
+        scoors = sfield.get_coor(snodes)
+
+        coors = mcoors - scoors
+        n_nod = coors.shape[0]
+
+        mtx_e = nm.tile(nm.eye(dim, dtype=nm.float64), (n_nod, 1))
+        if is_rotation:
+            mtx_r = _create_spin_matrix(coors).reshape((n_nod * dim, -1))
+            mtx = nm.hstack((mtx_e, mtx_r))
+
+        else:
+            mtx = mtx_e
+
+        rows = nm.repeat(meq, len(seq))
+        cols = nm.tile(seq, len(meq))
+        n_dofs = [variables.adi.n_dof[ii] for ii in self.var_names]
+        mtx = sp.coo_matrix((mtx.ravel(), (rows, cols)), shape=n_dofs)
+
+        self.mtx = mtx.tocsr()
+        self.ameq = meq
+        self.aseq = seq
+
+        self.n_mdof = len(nm.unique(meq))
+        self.n_sdof = len(nm.unique(seq))
+        self.n_new_dof = 0
+
+class AverageForceOperator(LCBCOperator):
+    r"""
+    Transformation matrix operator for average force multi-point constraint
+    LCBCs.
+
+    Unlike in other operators, the `regions` and `dof_names` couples are
+    ordered as (independent nodes/DOFs, dependent nodes/DOFs), to allow a
+    simple interchange with the ``rigid2`` LCBC in a problem description.
+    Functionally it corresponds to the RBE3 multi-point constraint in
+    MSC/Nastran.
+
+    A simplified version for fields without the rotation DOFs is also
+    supported.
+    """
+    kind = 'average_force'
+
+    def __init__(self, name, regions, dof_names, dof_map_fun,
+                 variables, ts=None, functions=None):
+        regions = regions[::-1]
+        dof_names = dof_names[::-1]
+        LCBCOperator.__init__(self, name, regions, dof_names, dof_map_fun,
+                              variables, functions=functions)
+
+        mvar, svar = variables[self.var_names[0]], variables[self.var_names[1]]
+        is_rotation = svar.n_components < mvar.n_components
+        dim = svar.dim
+        if is_rotation and dim not in (2, 3):
+            raise ValueError('space dimension must be 2 or 3! (is %d)' % dim)
+
+        mfield, sfield = mvar.field, svar.field
+        mnodes = mfield.get_dofs_in_region(regions[0], merge=True)
+        snodes = sfield.get_dofs_in_region(regions[1], merge=True)
+        if len(mnodes) != 1:
+            raise ValueError('number of dependent nodes must be 1! (is %d)'
+                             % len(mnodes))
+
+        self.mdofs = expand_nodes_to_equations(mnodes, dof_names[0],
+                                               self.all_dof_names[0])
+        self.sdofs = expand_nodes_to_equations(snodes, dof_names[1],
+                                               self.all_dof_names[1])
+
+        meq, seq = mvar.eq_map.eq[self.mdofs], svar.eq_map.eq[self.sdofs]
+
+        assert_(nm.all(meq >= 0))
+        assert_(nm.all(seq >= 0))
+
+        mcoors = mfield.get_coor(mnodes)
+        scoors = sfield.get_coor(snodes)
+        coors = scoors - mcoors
+        lengths = nm.linalg.norm(coors, axis=1)
+        n_nod = scoors.shape[0]
+
+        length = nm.mean(lengths)
+        if length == 0.0:
+            length = 1.0
+
+        sym = dim2sym(dim)
+        if dof_map_fun is None:
+            dof_map_fun = lambda a, b: nm.ones((n_nod, sym),
+                                               dtype=nm.float64)
+        sweights = dof_map_fun(mcoors, scoors)
+        sweights[:, dim:] *= length**2
+
+        if is_rotation:
+            mtx_s = nm.zeros((n_nod, sym, sym), dtype=nm.float64)
+            mtx_s[...] = nm.eye(sym, dtype=nm.float64)
+            mtx_s[:, :dim, dim:] = _create_spin_matrix(coors)
+
+            mtx_ws = (mtx_s * sweights[..., None])
+            mtx_ix = mtx_s.reshape((-1, sym)).T @ mtx_ws.reshape((-1, sym))
+
+            mtx_x = nm.linalg.inv(mtx_ix)
+
+            mtx_g = mtx_ws @ mtx_x
+
+            mtx = mtx_g[:, :dim, :].reshape((-1, sym)).T
+
+        else:
+            mtx = nm.tile(nm.eye(dim, dtype=nm.float64) * 1.0 / n_nod,
+                          (1, n_nod))
+
+        rows = nm.repeat(meq, len(seq))
+        cols = nm.tile(seq, len(meq))
+        n_dofs = [variables.adi.n_dof[ii] for ii in self.var_names]
+        mtx = sp.coo_matrix((mtx.ravel(), (rows, cols)), shape=n_dofs)
+
+        self.mtx = mtx.tocsr()
+        self.ameq = meq
+        self.aseq = seq
+
+        self.n_mdof = len(nm.unique(meq))
+        self.n_sdof = len(nm.unique(seq))
+        self.n_new_dof = 0
 
 def _save_vectors(filename, vectors, region, mesh, data_name):
     """
@@ -379,7 +551,7 @@ class NodalLCOperator(MRLCBCOperator):
             ifixed = []
             islaves = set()
             ccs = []
-            for key, _poly in six.iteritems(sol):
+            for key, _poly in sol.items():
                 imaster = int(key.name[1:])
                 imasters.append(imaster)
 
@@ -528,6 +700,78 @@ class MatchDOFsOperator(ShiftedPeriodicOperator):
                                          ts, functions=functions)
 
 
+class MultiNodeLCOperator(LCBCOperator):
+    r"""
+    Transformation matrix operator that defines the DOFs at one (dependent) node
+    as a linear combination of the DOFs at some other (independent) nodes.
+
+    The linear combination is given by:
+
+    .. math::
+        \bar u_i = \sum_{j=1}^n c^{j} u_i^j\;,
+
+    for all :math:`i` in a given set of DOFs. :math:`j = 1, \dots, n` are
+    the linear constraint indices and :math:`c^j` are given weights of
+    the independent nodes.
+    """
+    kind = 'multi_node_combination'
+
+    def __init__(self, name, regions, dof_names, dof_map_fun,
+                 constraints, variables, ts, functions):
+        LCBCOperator.__init__(self, name, regions, dof_names, dof_map_fun,
+                              variables, functions=functions)
+
+        if dof_names[0] != dof_names[1]:
+            msg = ('multi node combination EPBC dof lists do not match!'
+                   f' ({dof_names[0]}, {dof_names[1]})')
+            raise ValueError(msg)
+
+        mvar, svar = variables[self.var_names[0]], variables[self.var_names[1]]
+        mfield, sfield = mvar.field, svar.field
+
+        mnodes = mfield.get_dofs_in_region(regions[0], merge=True)
+        snodes = sfield.get_dofs_in_region(regions[1], merge=True)
+
+        if constraints is None:
+            midxs, sidxs, constraints = \
+                self.dof_map_fun(mfield.get_coor(mnodes),
+                                 sfield.get_coor(snodes))
+        else:
+            midxs, sidxs = self.dof_map_fun(mfield.get_coor(mnodes),
+                                            sfield.get_coor(snodes))
+            constraints = nm.tile(constraints, (len(midxs), 1))
+
+        sidxs0, smap = nm.unique(sidxs, return_inverse=True)
+
+        self.mdofs = expand_nodes_to_equations(mnodes[midxs], dof_names[0],
+                                               self.all_dof_names[0])
+        self.sdofs = expand_nodes_to_equations(snodes[sidxs0], dof_names[1],
+                                               self.all_dof_names[1])
+
+        meq, seq = mvar.eq_map.eq[self.mdofs], svar.eq_map.eq[self.sdofs]
+        # meq, seq = meq[meq >= 0], seq[seq >= 0]
+        dpn = len(dof_names[0])
+        ncons = constraints.shape[1]
+        smap = smap.reshape((-1, ncons))
+        n_dofs = [variables.adi.n_dof[ii] for ii in self.var_names]
+
+        vals = nm.repeat(constraints, dpn, axis=0).T.ravel()
+        rows = nm.tile(meq, ncons)
+        aux = nm.arange(dpn)[None, :]
+        idxs = [(snds[:, None] * dpn + aux).ravel() for snds in smap.T]
+        cols = seq[nm.hstack(idxs)]
+
+        mtx = sp.coo_matrix((vals, (rows, cols)), shape=n_dofs)
+        self.mtx = mtx.tocsr()
+
+        self.ameq = meq
+        self.aseq = seq
+
+        self.n_mdof = len(nm.unique(meq))
+        self.n_sdof = len(nm.unique(seq))
+        self.n_new_dof = 0
+
+
 class LCBCOperators(Container):
     """
     Container holding instances of LCBCOperator subclasses for a single
@@ -601,7 +845,8 @@ class LCBCOperators(Container):
 
         Initializes the global column indices and DOF counts.
         """
-        keys = self.variables.adi.var_names
+        adi = self.variables.adi
+        keys = [k for k in adi.var_names if k not in adi.shared_dofs]
         self.n_master = {}.fromkeys(keys, 0)
         self.n_slave = {}.fromkeys(keys, 0)
         self.n_new = {}.fromkeys(keys, 0)
@@ -616,14 +861,14 @@ class LCBCOperators(Container):
             ics.setdefault(op.var_names[0], []).append((ii, op.n_new_dof))
 
         self.ics = {}
-        for key, val in six.iteritems(ics):
+        for key, val in ics.items():
             iis, ics = zip(*val)
             self.ics[key] = (iis, nm.cumsum(nm.r_[0, ics]))
 
         self.n_free = {}
         self.n_active = {}
-        n_dof = self.variables.adi.n_dof
-        for key in six.iterkeys(self.n_master):
+        n_dof = adi.n_dof
+        for key in keys:
             self.n_free[key] = n_dof[key] - self.n_master[key]
             self.n_active[key] = self.n_free[key] + self.n_new[key]
 
@@ -663,10 +908,10 @@ class LCBCOperators(Container):
         if len(self) == 0: return (None,) * 3
 
         n_dof = self.variables.adi.n_dof_total
-        n_constrained = nm.sum([val for val in six.itervalues(self.n_master)])
-        n_dof_free = nm.sum([val for val in six.itervalues(self.n_free)])
-        n_dof_new = nm.sum([val for val in six.itervalues(self.n_new)])
-        n_dof_active = nm.sum([val for val in six.itervalues(self.n_active)])
+        n_constrained = nm.sum([val for val in self.n_master.values()])
+        n_dof_free = nm.sum([val for val in self.n_free.values()])
+        n_dof_new = nm.sum([val for val in self.n_new.values()])
+        n_dof_active = nm.sum([val for val in self.n_active.values()])
 
         output('dofs: total %d, free %d, constrained %d, new %d'\
                % (n_dof, n_dof_free, n_constrained, n_dof_new))
@@ -755,8 +1000,9 @@ class LCBCOperators(Container):
             ir = nm.where(lcbc_mask)[0]
             ic = nm.empty((n_dof_free,), dtype=nm.int32)
             for var_name in adi.var_names:
-                ii = nm.arange(fdi.n_dof[var_name], dtype=nm.int32)
-                ic[fdi.indx[var_name]] = lcdi.indx[var_name].start + ii
+                if var_name not in adi.shared_dofs:
+                    ii = nm.arange(fdi.n_dof[var_name], dtype=nm.int32)
+                    ic[fdi.indx[var_name]] = lcdi.indx[var_name].start + ii
 
             mtx_lc2 = sp.coo_matrix((nm.ones((ir.shape[0],)), (ir, ic)),
                                     shape=(n_dof, n_dof_active),

@@ -168,8 +168,8 @@ def read_mesh(filenames, step=None, print_info=True, ret_n_steps=False,
         fname = filenames[fstep]
         key = (fname, fstep)
         if key not in cache or not use_cache:
-            cache[key] = pv.UnstructuredGrid(fname)
-        mesh = cache[key]
+            cache[key] = ((fstep, float(fstep)), pv.UnstructuredGrid(fname))
+        ftime, mesh = cache[key]
         cache['n_steps'] = len(filenames)
     elif ext in ['.xdmf', '.xdmf3']:
         import meshio
@@ -196,7 +196,7 @@ def read_mesh(filenames, step=None, print_info=True, ret_n_steps=False,
             if not reader.num_steps:
                 grid = pv.UnstructuredGrid(offset, cells, cell_type, points)
                 add_mat_id_to_grid(grid, mesh.cmesh.cell_groups)
-                cache[(fname, 0)] = grid
+                cache[(fname, 0)] = (0.0, grid)
 
             grids = {}
             time = []
@@ -218,56 +218,63 @@ def read_mesh(filenames, step=None, print_info=True, ret_n_steps=False,
 
             time.sort()
             for _step, t in enumerate(time):
-                cache[(fname, _step)] = grids[t]
+                cache[(fname, _step)] = ((_step, t), grids[t])
 
             cache[(fname, None)] = cache[(fname, 0)]
             cache['n_steps'] = reader.num_steps
 
-        mesh = cache[key]
+        ftime, mesh = cache[key]
 
     elif ext in ['.h5', '.h5x']:
         # Custom sfepy format.
         fname = filenames[0]
-        key = (fname, step)
-        if key not in cache:
+        if 'io' not in cache:
             from sfepy.discrete.fem.meshio import MeshIO
 
             io = MeshIO.any_from_filename(fname)
 
             smesh = io.read()
-            steps, times, nts = io.read_times()
-            if not len(steps):
+
+            cache['steps'], cache['times'], _ = io.read_times()
+            if not len(cache['steps']):
                 grid0 = make_grid_from_mesh(smesh, add_mat_id=True)
-                cache[(fname, 0)] = grid0
+                cache[(fname, 0)] = ((0, 0.0), grid0)
 
             else:
                 grid0 = make_grid_from_mesh(smesh, add_mat_id=False)
 
-            for ii, _step in enumerate(steps):
-                grid = grid0.copy()
-                datas = io.read_data(_step)
-                for dk, data in datas.items():
-                    vval = data.data
-                    if 1 < len(data.dofs) < 3:
-                        vval = nm.c_[vval,
-                                     nm.zeros((len(vval), 3 - len(data.dofs)))]
+            cache['io'] = io
+            cache['grid0'] = grid0
+            cache['n_steps'] = len(cache['steps'])
 
-                    if data.mode == 'vertex':
-                        val = numpy_to_vtk(vval)
-                        val.SetName(dk)
-                        grid.GetPointData().AddArray(val)
+        if step is None:
+            step = 0
+        key = (fname, step)
+        if key not in cache:
+            io = cache['io']
+            grid = cache['grid0'].copy()
 
-                    else:
-                        val = numpy_to_vtk(vval[:, 0, :, 0])
-                        val.SetName(dk)
-                        grid.GetCellData().AddArray(val)
+            _step = cache['steps'][step]
+            datas = io.read_data(_step)
+            for dk, data in datas.items():
+                vval = data.data
+                if 1 < len(data.dofs) < 3:
+                    vval = nm.c_[vval,
+                                 nm.zeros((len(vval), 3 - len(data.dofs)))]
 
-                cache[(fname, ii)] = grid
+                if data.mode == 'vertex':
+                    val = numpy_to_vtk(vval)
+                    val.SetName(dk)
+                    grid.GetPointData().AddArray(val)
 
-            cache[(fname, None)] = cache[(fname, 0)]
-            cache['n_steps'] = len(steps)
+                else:
+                    val = numpy_to_vtk(vval[:, 0, :, 0])
+                    val.SetName(dk)
+                    grid.GetCellData().AddArray(val)
 
-        mesh = cache[key]
+            cache[(fname, step)] = ((_step, cache['times'][step]), grid)
+
+        ftime, mesh = cache[key]
 
     else:
         fname = filenames[0]
@@ -281,10 +288,10 @@ def read_mesh(filenames, step=None, print_info=True, ret_n_steps=False,
             smesh = io.read(smesh)
 
             grid = make_grid_from_mesh(smesh, add_mat_id=True)
-            cache[(fname, 0)] = grid
+            cache[(fname, 0)] = ((0, 0.0), grid)
             cache['n_steps'] = len(filenames)
 
-        mesh = cache[key]
+        ftime, mesh = cache[key]
 
     if print_info:
         arrs = {'s': [], 'v': [], 'o': []}
@@ -311,12 +318,57 @@ def read_mesh(filenames, step=None, print_info=True, ret_n_steps=False,
         print('  steps:   %d' % cache['n_steps'])
 
     if ret_n_steps:
-        return mesh, cache['n_steps']
+        return ftime, mesh, cache['n_steps']
     else:
-        return mesh
+        return ftime, mesh
 
+def ensure3d(arr):
+    arr = nm.asanyarray(arr)
+    return nm.pad(arr, (arr.ndim - 1) * [(0, 0)] + [(0, 3 - arr.shape[-1])])
 
-def pv_plot(filenames, options, plotter=None, step=None,
+def read_probes_as_annotations(filenames, add_label=True):
+    from sfepy.discrete.probes import read_results
+    from sfepy.linalg.geometry import get_perpendiculars
+
+    annotations = []
+    for filename in filenames:
+        header, results = read_results(filename)
+        data = header.details
+        if header.probe_class == 'PointsProbe':
+            data = ensure3d(data)
+            ann = [('points', data)]
+            tcoors = data.mean(axis=0)
+
+        elif header.probe_class == 'LineProbe':
+            data = ensure3d(data)
+            ann = [('line', data[0], data[1])]
+            tcoors = data.mean(axis=0)
+
+        elif header.probe_class == 'RayProbe':
+            data[:2] = ensure3d(data[:2])
+            ann = [('arrow', data[0], data[1])]
+            if data[2]:
+                ann += [('arrow', data[0], -data[1])]
+            tcoors = data[0]
+
+        elif header.probe_class == 'CircleProbe':
+            data[:2] = ensure3d(data[:2])
+            ann = [('disc', data[0], data[1], data[2])]
+            vec = get_perpendiculars(data[1])[0]
+            tcoors = data[0] + data[2] * vec
+
+        else:
+            raise ValueError(f'unknown probe kind! {header.probe_class}')
+
+        if add_label:
+            ann += [('text', [tcoors],
+                     [osp.splitext(osp.basename(filename))[0]])]
+
+        annotations.extend(ann)
+
+    return annotations
+
+def pv_plot(filenames, options, plotter=None, step=None, annotations=None,
             scalar_bar_limits=None, ret_scalar_bar_limits=False,
             step_inc=None, use_cache=True):
     fstep = (step if step is not None else options.step)
@@ -337,11 +389,13 @@ def pv_plot(filenames, options, plotter=None, step=None,
     if step_inc is not None:
         plotter.clear()
 
-    mesh, n_steps = read_mesh(filenames, fstep, ret_n_steps=True,
-                              use_cache=use_cache)
+    ftime, mesh, n_steps = read_mesh(filenames, fstep, ret_n_steps=True,
+                                     use_cache=use_cache)
     steps = {fstep: mesh}
+    ftimes = {fstep: ftime}
 
     bbox_sizes = nm.diff(nm.reshape(mesh.bounds, (-1, 2)), axis=1)
+    dim = len(bbox_sizes)
     ii = nm.where(bbox_sizes > 0)[0]
     tdim = len(ii)
     if tdim == 0:
@@ -380,7 +434,7 @@ def pv_plot(filenames, options, plotter=None, step=None,
             fval = steps[fstep][field]
             bnds = steps[fstep].bounds
             mesh_size = (nm.array(bnds[1::2]) - nm.array(bnds[::2])).max()
-            is_vector_field = len(fval.shape) > 1
+            is_vector_field = (len(fval.shape) == 2) and (fval.shape[1] == dim)
             is_point_field = fval.shape[0] == steps[fstep].n_points
             if is_vector_field and is_point_field:
                 scale = mesh_size * 0.15 / nm.linalg.norm(fval, axis=1).max()
@@ -422,8 +476,8 @@ def pv_plot(filenames, options, plotter=None, step=None,
             fstep = opts['s']
 
         if fstep not in steps:
-            steps[fstep] = read_mesh(filenames, step=fstep,
-                                     use_cache=use_cache)
+            ftimes[fstep], steps[fstep] = read_mesh(filenames, step=fstep,
+                                                    use_cache=use_cache)
 
         pipe = [steps[fstep].copy()]
         pos_bnds = pipe[0].bounds
@@ -494,7 +548,9 @@ def pv_plot(filenames, options, plotter=None, step=None,
 
         scalar = field
         scalar_label = scalar
-        is_vector_field = field is not None and len(pipe[-1][field].shape) > 1
+        is_vector_field = ((field is not None)
+                           and (len(pipe[-1][field].shape) > 1)
+                           and (pipe[-1][field].shape[1] == dim))
         is_point_field = (field is not None and
                           pipe[-1][field].shape[0] == pipe[-1].n_points)
         if is_vector_field:
@@ -600,6 +656,38 @@ def pv_plot(filenames, options, plotter=None, step=None,
                                    position_x=x_pos, position_y=y_pos,
                                    width=width, height=height,
                                    n_labels=2, mapper=mapper)
+    if annotations is not None:
+        for ann in annotations:
+            kind, data = ann[0], ann[1:]
+            if kind == 'points':
+                pdata = pv.PolyData(data[0])
+
+            elif kind == 'line':
+                pdata = pv.Line(*data)
+
+            elif kind == 'arrow':
+                # Scale arrows by bbox.
+                vec = data[1]
+                maxs = bbox_sizes.max()
+                vec *= 0.1 * maxs / nm.linalg.norm(vec)
+                pdata = pv.Arrow(data[0], vec, scale='auto')
+
+            elif kind == 'disc':
+                pdata = pv.Disc(data[0],
+                                inner=0.99 * data[2],
+                                outer=1.01 * data[2],
+                                normal=data[1], c_res=20)
+            elif kind == 'text':
+                plotter.add_point_labels(data[0], data[1],
+                                         always_visible=True)
+
+            else:
+                raise ValueError(f'unknown annotation! {kind}')
+
+            plotter.add_mesh(pdata, opacity=opacity, color='black',
+                             line_width=5, render_lines_as_tubes=True,
+                             point_size=10, render_points_as_spheres=True,
+                             show_scalar_bar=False)
 
     if options.show_labels and len(plots) > 1:
         labels, points = [], []
@@ -612,6 +700,14 @@ def pv_plot(filenames, options, plotter=None, step=None,
             points.append(bnds[0] + nm.array(olpos[:3]) * size * olpos[3])
 
         plotter.add_point_labels(nm.array(points), labels)
+
+    if options.show_step_time:
+        _step, _time = ftimes[fstep]
+        step_info = f'{_step:6d}: {_time:.8e}'
+        if len(filenames) > 1:
+            step_info += ': ' + osp.splitext(osp.basename(filenames[fstep]))[0]
+
+        plotter.add_text(step_info, font='courier', font_size=10)
 
     for k, v in plots.items():
         print('plot %d: %s' % (k, '; '.join(iv[1] for iv in v)))
@@ -745,6 +841,12 @@ helps = {
         'select data in a given time step',
     '2d_view':
         '2d view of XY plane',
+    'probes':
+        'visualize probes in the given files',
+    'no_probe_labels':
+        'hide probe labels',
+    'no_step_time':
+        'hide current step and time',
 }
 
 
@@ -840,16 +942,36 @@ def main():
     parser.add_argument('-2', '--2d-view',
                         action='store_true', dest='view_2d',
                         default=False, help=helps['2d_view'])
+    parser.add_argument('--probes', metavar='filename', nargs='+',
+                        dest='probes', default=None, help=helps['probes'])
+    parser.add_argument('--no-probe-labels',
+                        action='store_false', dest='show_probe_labels',
+                        default=True, help=helps['no_probe_labels'])
+    parser.add_argument('--no-step-time',
+                        action='store_false', dest='show_step_time',
+                        default=True, help=helps['no_step_time'])
 
     parser.add_argument('filenames', nargs='+')
     options = parser.parse_args()
+
+    if options.probes is not None:
+        annotations = read_probes_as_annotations(options.probes,
+                                                 options.show_probe_labels)
+
+    else:
+        annotations = None
+
+    anim_filename = options.anim_output_file
+    if anim_filename:
+        if anim_filename.endswith('.png') or anim_filename.endswith('.mp4'):
+            options.off_screen = True
 
     pv.set_plot_theme("document")
     plotter = pv.Plotter(off_screen=options.off_screen,
                          title=make_title(options.filenames))
 
     if options.anim_output_file:
-        _, n_steps = read_mesh(options.filenames, ret_n_steps=True)
+        _, _, n_steps = read_mesh(options.filenames, ret_n_steps=True)
         # dry run
         scalar_bar_limits = None
         if options.axes_visibility:
@@ -858,6 +980,7 @@ def main():
             plotter.clear()
             plotter, sb_limits = pv_plot(options.filenames, options,
                                          plotter=plotter, step=step,
+                                         annotations=annotations,
                                          ret_scalar_bar_limits=True)
             if scalar_bar_limits is None:
                 scalar_bar_limits = {k: [] for k in sb_limits.keys()}
@@ -873,14 +996,20 @@ def main():
         elif options.view_2d:
             plotter.view_xy()
 
-        anim_filename = options.anim_output_file
         if anim_filename.endswith('.png'):
             from sfepy.base.ioutils import edit_filename
             fig_name = edit_filename(anim_filename, suffix='{step:05d}')
+            plotter.show(auto_close=False)
+
+        elif anim_filename.endswith('.gif'):
+            from sfepy.base.ioutils import edit_filename
+            fig_name = None
+            plotter.open_gif(anim_filename)
 
         else:
             fig_name = None
             plotter.open_movie(anim_filename, options.framerate)
+            plotter.show(auto_close=False)
 
         for k in scalar_bar_limits.keys():
             lims = scalar_bar_limits[k]
@@ -892,7 +1021,8 @@ def main():
         for step in range(n_steps):
             plotter.clear()
             plotter = pv_plot(options.filenames, options, plotter=plotter,
-                              step=step, scalar_bar_limits=scalar_bar_limits)
+                              step=step, annotations=annotations,
+                              scalar_bar_limits=scalar_bar_limits)
             if options.axes_visibility:
                 plotter.add_axes(**dict(options.axes_options))
 
@@ -902,10 +1032,10 @@ def main():
             else:
                 plotter.screenshot(fig_name.format(step=step), return_img=False)
 
-        plotter.show()
         plotter.close()
     else:
-        plotter = pv_plot(options.filenames, options, plotter=plotter)
+        plotter = pv_plot(options.filenames, options, plotter=plotter,
+                          annotations=annotations)
         if options.axes_visibility:
             plotter.add_axes(**dict(options.axes_options))
 
@@ -914,6 +1044,7 @@ def main():
                                      options,
                                      step=plotter.resview_step,
                                      step_inc=-1,
+                                     annotations=annotations,
                                      plotter=plotter)
         )
         plotter.add_key_event(
@@ -921,6 +1052,7 @@ def main():
                                     options,
                                     step=plotter.resview_step,
                                     step_inc=1,
+                                    annotations=annotations,
                                     plotter=plotter)
         )
 
